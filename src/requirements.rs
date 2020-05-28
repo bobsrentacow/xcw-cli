@@ -129,7 +129,7 @@ impl OutputConstraint {
 // Requirements
 //   This should fully specify the problem we are trying to solve.
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Fraction {
     pub num: u16,
     pub den: u16,
@@ -141,13 +141,12 @@ impl Into<f64> for Fraction {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[allow(dead_code)] // Absolute is never constructed
 pub enum ErrorType {
     Absolute,
     Ratiometric,
 }
-
 impl fmt::Display for ErrorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -157,7 +156,7 @@ impl fmt::Display for ErrorType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SortOrder {
     RootMeanSquareError,
     RatiometricErrorWorstChannel,
@@ -200,9 +199,6 @@ impl TryFrom<Opt> for Requirements {
         if opt.sort_by_rmse && opt.sort_by_worst {
             return Err("Can't specify two different sort orders");
         }
-        if !opt.sort_by_rmse && !opt.sort_by_worst {
-            return Err("must specify exactly one target");
-        }
         if opt.use_mmcm && opt.use_pll {
             return Err("must specify exactly one target");
         }
@@ -223,8 +219,8 @@ impl TryFrom<Opt> for Requirements {
         let vco_divider_num_max;
         let vco_divider_den_min;
         let vco_divider_den_max;
-        let vco_megahz_max = 0_f64;
-        let vco_megahz_min = 0_f64;
+        let vco_megahz_max;
+        let vco_megahz_min;
         let mut chan_divider_min = Vec::<Fraction>::new();
         let mut chan_divider_max = Vec::<Fraction>::new();
 
@@ -261,9 +257,11 @@ impl TryFrom<Opt> for Requirements {
             vco_megahz_max = 1200_f64;
             vco_megahz_min = 600_f64;
             for _ in 0..max_outputs {
-                chan_divider_min.push(Fraction { num: 128, den: 1 });
+                chan_divider_min.push(Fraction { num: 1, den: 1 });
                 chan_divider_max.push(Fraction { num: 128, den: 1 });
             }
+        } else {
+            return Err("must specify exactly one target");
         }
 
         // Check limits associated with target.
@@ -365,13 +363,18 @@ mod tests {
         let opt = Opt {
             use_mmcm: true,
             use_pll: true,
+            sort_by_rmse: false,
+            sort_by_worst: false,
             max_solutions: 32,
             inp_megahz: 156.25,
-            output_constraints: vec![String::from("166.6"), String::from("gte187.5")],
+            output_specifiers: vec![String::from("166.6"), String::from("gte187.5")],
         };
-        let reqs = Requirements::from(opt);
-        assert_eq!(reqs.valid, false);
-        Ok(())
+
+        if let Ok(_) = Requirements::try_from(opt) {
+            Err(String::from("Requirements::try_from(opt) Should have failed"))
+        } else {
+            Ok(())
+        }
     }
 
     #[test]
@@ -379,24 +382,35 @@ mod tests {
         let opt = Opt {
             use_mmcm: true,
             use_pll: false,
+            sort_by_rmse: false,
+            sort_by_worst: false,
             max_solutions: 32,
             inp_megahz: 156.25,
-            output_constraints: vec![String::from("166.6"), String::from("gte187.5")],
+            output_specifiers: vec![String::from("166.6"), String::from("gte187.5")],
         };
         let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.output_constraints.len();
+        let num_outputs = opt.output_specifiers.len();
 
-        let reqs = Requirements::from(opt);
-
-        assert_eq!(reqs.valid, true);
-        assert_eq!(reqs.max_solutions, max_solutions);
-        assert_eq!(reqs.max_outputs, 8);
-        assert_eq!(reqs.vco_megahz_max, 1200_f64);
-        assert_eq!(reqs.vco_megahz_min, 600_f64);
-        assert_eq!(reqs.inp_megahz, inp_megahz);
-        assert_eq!(reqs.output_constraints.len(), num_outputs);
-        Ok(())
+        if let Ok(reqs) = Requirements::try_from(opt) {
+            assert_eq!(reqs.error_type, ErrorType::Ratiometric);
+            assert_eq!(reqs.sort_order, SortOrder::RootMeanSquareError);
+            assert_eq!(reqs.max_solutions, max_solutions);
+            assert_eq!(reqs.inp_megahz, inp_megahz);
+            assert_eq!(reqs.output_constraints.len(), num_outputs);
+            // target hardware description
+            assert_eq!(reqs.vco_divider_num_min, Fraction{ num: 2 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_num_max, Fraction{ num: 64 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_den_min, 1);
+            assert_eq!(reqs.vco_divider_den_max, 106);
+            assert_eq!(reqs.vco_megahz_max, 1200_f64);
+            assert_eq!(reqs.vco_megahz_min, 600_f64);
+            assert_eq!(reqs.chan_divider_min.len(), 8);
+            assert_eq!(reqs.chan_divider_max.len(), 8);
+            Ok(())
+        } else {
+            Err(String::from("failed to parse requirements"))
+        }
     }
 
     #[test]
@@ -404,24 +418,35 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
+            sort_by_rmse: false,
+            sort_by_worst: false,
             max_solutions: 32,
             inp_megahz: 156.25,
-            output_constraints: vec![String::from("166.6"), String::from("gte187.5")],
+            output_specifiers: vec![String::from("166.6"), String::from("gte187.5")],
         };
         let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.output_constraints.len();
+        let num_outputs = opt.output_specifiers.len();
 
-        let reqs = Requirements::from(opt);
-
-        assert_eq!(reqs.valid, true);
-        assert_eq!(reqs.max_solutions, max_solutions);
-        assert_eq!(reqs.max_outputs, 2);
-        assert_eq!(reqs.vco_megahz_max, 1200_f64);
-        assert_eq!(reqs.vco_megahz_min, 600_f64);
-        assert_eq!(reqs.inp_megahz, inp_megahz);
-        assert_eq!(reqs.output_constraints.len(), num_outputs);
-        Ok(())
+        if let Ok(reqs) = Requirements::try_from(opt) {
+            assert_eq!(reqs.error_type, ErrorType::Ratiometric);
+            assert_eq!(reqs.sort_order, SortOrder::RootMeanSquareError);
+            assert_eq!(reqs.max_solutions, max_solutions);
+            assert_eq!(reqs.inp_megahz, inp_megahz);
+            assert_eq!(reqs.output_constraints.len(), num_outputs);
+            // target hardware description
+            assert_eq!(reqs.vco_divider_num_min, Fraction{ num: 2 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_num_max, Fraction{ num: 64 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_den_min, 1);
+            assert_eq!(reqs.vco_divider_den_max, 106);
+            assert_eq!(reqs.vco_megahz_max, 1200_f64);
+            assert_eq!(reqs.vco_megahz_min, 600_f64);
+            assert_eq!(reqs.chan_divider_min.len(), 2);
+            assert_eq!(reqs.chan_divider_max.len(), 2);
+            Ok(())
+        } else {
+            Err(String::from("failed to parse requirements"))
+        }
     }
 
     #[test]
@@ -429,29 +454,41 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
+            sort_by_rmse: false,
+            sort_by_worst: false,
             max_solutions: 32,
             inp_megahz: 156.25,
-            output_constraints: vec![String::from("166.6"), String::from("181.1-188.8")],
+            output_specifiers: vec![String::from("166.6"), String::from("181.1-188.8")],
         };
         let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.output_constraints.len();
+        let num_outputs = opt.output_specifiers.len();
 
-        let reqs = Requirements::from(opt);
+        if let Ok(reqs) = Requirements::try_from(opt) {
+            assert_eq!(reqs.error_type, ErrorType::Ratiometric);
+            assert_eq!(reqs.sort_order, SortOrder::RootMeanSquareError);
+            assert_eq!(reqs.max_solutions, max_solutions);
+            assert_eq!(reqs.inp_megahz, inp_megahz);
+            assert_eq!(reqs.output_constraints.len(), num_outputs);
+            // target hardware description
+            assert_eq!(reqs.vco_divider_num_min, Fraction{ num: 2 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_num_max, Fraction{ num: 64 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_den_min, 1);
+            assert_eq!(reqs.vco_divider_den_max, 106);
+            assert_eq!(reqs.vco_megahz_max, 1200_f64);
+            assert_eq!(reqs.vco_megahz_min, 600_f64);
+            assert_eq!(reqs.chan_divider_min.len(), 2);
+            assert_eq!(reqs.chan_divider_max.len(), 2);
 
-        assert_eq!(reqs.valid, true);
-        assert_eq!(reqs.max_solutions, max_solutions);
-        assert_eq!(reqs.max_outputs, 2);
-        assert_eq!(reqs.vco_megahz_max, 1200_f64);
-        assert_eq!(reqs.vco_megahz_min, 600_f64);
-        assert_eq!(reqs.inp_megahz, inp_megahz);
-        assert_eq!(reqs.output_constraints.len(), num_outputs);
-        if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
-            assert!((min - 181.1).abs() < 1e-6);
-            assert!((max - 188.8).abs() < 1e-6);
-            Ok(())
+            if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
+                assert!((min - 181.1).abs() < 1e-6);
+                assert!((max - 188.8).abs() < 1e-6);
+                Ok(())
+            } else {
+                Err(String::from("parsing error"))
+            }
         } else {
-            Err(String::from("parsing error"))
+            Err(String::from("failed to parse requirements"))
         }
     }
 
@@ -460,29 +497,41 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
+            sort_by_rmse: false,
+            sort_by_worst: false,
             max_solutions: 32,
             inp_megahz: 156.25,
-            output_constraints: vec![String::from("166.6"), String::from("181.1+-0.9pct")],
+            output_specifiers: vec![String::from("166.6"), String::from("181.1+-0.9pct")],
         };
         let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.output_constraints.len();
+        let num_outputs = opt.output_specifiers.len();
 
-        let reqs = Requirements::from(opt);
+        if let Ok(reqs) = Requirements::try_from(opt) {
+            assert_eq!(reqs.error_type, ErrorType::Ratiometric);
+            assert_eq!(reqs.sort_order, SortOrder::RootMeanSquareError);
+            assert_eq!(reqs.max_solutions, max_solutions);
+            assert_eq!(reqs.inp_megahz, inp_megahz);
+            assert_eq!(reqs.output_constraints.len(), num_outputs);
+            // target hardware description
+            assert_eq!(reqs.vco_divider_num_min, Fraction{ num: 2 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_num_max, Fraction{ num: 64 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_den_min, 1);
+            assert_eq!(reqs.vco_divider_den_max, 106);
+            assert_eq!(reqs.vco_megahz_max, 1200_f64);
+            assert_eq!(reqs.vco_megahz_min, 600_f64);
+            assert_eq!(reqs.chan_divider_min.len(), 2);
+            assert_eq!(reqs.chan_divider_max.len(), 2);
 
-        assert_eq!(reqs.valid, true);
-        assert_eq!(reqs.max_solutions, max_solutions);
-        assert_eq!(reqs.max_outputs, 2);
-        assert_eq!(reqs.vco_megahz_max, 1200_f64);
-        assert_eq!(reqs.vco_megahz_min, 600_f64);
-        assert_eq!(reqs.inp_megahz, inp_megahz);
-        assert_eq!(reqs.output_constraints.len(), num_outputs);
-        if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
-            assert!((min - (181.1 * 0.991)).abs() < 1e-6);
-            assert!((max - (181.1 * 1.009)).abs() < 1e-6);
-            Ok(())
+            if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
+                assert!((min - (181.1 * 0.991)).abs() < 1e-6);
+                assert!((max - (181.1 * 1.009)).abs() < 1e-6);
+                Ok(())
+            } else {
+                Err(String::from("parsing error"))
+            }
         } else {
-            Err(String::from("parsing error"))
+            Err(String::from("failed to parse requirements"))
         }
     }
 
@@ -491,31 +540,41 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
+            sort_by_rmse: false,
+            sort_by_worst: false,
             max_solutions: 32,
             inp_megahz: 156.25,
-            output_constraints: vec![String::from("166.6"), String::from("181.1+-3.5ppm")],
+            output_specifiers: vec![String::from("166.6"), String::from("181.1+-3.5ppm")],
         };
         let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.output_constraints.len();
+        let num_outputs = opt.output_specifiers.len();
 
-        let reqs = Requirements::from(opt);
+        if let Ok(reqs) = Requirements::try_from(opt) {
+            assert_eq!(reqs.error_type, ErrorType::Ratiometric);
+            assert_eq!(reqs.sort_order, SortOrder::RootMeanSquareError);
+            assert_eq!(reqs.max_solutions, max_solutions);
+            assert_eq!(reqs.inp_megahz, inp_megahz);
+            assert_eq!(reqs.output_constraints.len(), num_outputs);
+            // target hardware description
+            assert_eq!(reqs.vco_divider_num_min, Fraction{ num: 2 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_num_max, Fraction{ num: 64 * 8, den: 8});
+            assert_eq!(reqs.vco_divider_den_min, 1);
+            assert_eq!(reqs.vco_divider_den_max, 106);
+            assert_eq!(reqs.vco_megahz_max, 1200_f64);
+            assert_eq!(reqs.vco_megahz_min, 600_f64);
+            assert_eq!(reqs.chan_divider_min.len(), 2);
+            assert_eq!(reqs.chan_divider_max.len(), 2);
 
-        assert_eq!(reqs.valid, true);
-        assert_eq!(reqs.max_solutions, max_solutions);
-        assert_eq!(reqs.max_outputs, 2);
-        assert_eq!(reqs.vco_megahz_max, 1200_f64);
-        assert_eq!(reqs.vco_megahz_min, 600_f64);
-        assert_eq!(reqs.inp_megahz, inp_megahz);
-        assert_eq!(reqs.output_constraints.len(), num_outputs);
-        if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
-            assert!((min - (181.1 * (1_f64 - 3.5e-6))).abs() < 1e-6);
-            assert!((max - (181.1 * (1_f64 + 3.5e-6))).abs() < 1e-6);
-            Ok(())
+            if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
+                assert!((min - (181.1 * (1_f64 - 3.5e-6))).abs() < 1e-6);
+                assert!((max - (181.1 * (1_f64 + 3.5e-6))).abs() < 1e-6);
+                Ok(())
+            } else {
+                Err(String::from("parsing error"))
+            }
         } else {
-            Err(String::from("parsing error"))
+            Err(String::from("failed to parse requirements"))
         }
     }
-
-    // TODO: add many tests
 }

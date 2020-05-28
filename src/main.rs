@@ -1,8 +1,4 @@
-// use colored::Colorize;
-// use math::round;
-// use std::cmp;
 use std::convert::TryFrom;
-// use std::fmt;
 use structopt::StructOpt;
 
 mod cli_args;
