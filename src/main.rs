@@ -5,14 +5,16 @@ use std::convert::TryFrom;
 use std::fmt;
 use structopt::StructOpt;
 
-
 // TODO: Learn how to use the doc tool and add special comments
 
 //----
 // Command Line Parsing
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "xilinx clock wizard", about = "How to calulate and display results")]
+#[structopt(
+    name = "xilinx clock wizard",
+    about = "How to calulate and display results"
+)]
 struct Opt {
     /// Select UltraScale MMCM mode
     #[structopt(short = "m", long = "mmcm")]
@@ -55,8 +57,12 @@ enum OutputConstraint {
     GreaterThanOrEqual(f64),
     GreaterThan(f64),
 }
+
 impl OutputConstraint {
     fn try_parse(the_string: &str) -> Result<Self, &'static str> {
+        // You would be better off using something like
+        // https://docs.rs/scan-rules/0.2.0/scan_rules/#rule-syntax here.
+
         // text_io parsers
         let try_scan_less_than_or_equal =
             |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
@@ -133,6 +139,7 @@ impl OutputConstraint {
             };
 
         // TODO: is there a more idiomatic way to do this in rust?
+        // Nope, this seems about as idiotic as it gets ;) You crushed it.
         if let Ok(res) = try_scan_less_than_or_equal(&the_string) {
             Ok(res)
         } else if let Ok(res) = try_scan_less_than(&the_string) {
@@ -164,19 +171,17 @@ impl OutputConstraint {
 //   This should fully specify the problem we are trying to solve.
 
 // TODO: Couldn't figure out how to get Into<f64> working.
-#[derive(Debug, Copy)]
+// Yeah it's a little tricky because you can't call `into()` in the print! macro as it takes in
+// lots of types. So you have to explicitly call it with Into::<T>::into(...)
+#[derive(Debug, Copy, Clone)]
 struct Fraction {
     num: u16,
     den: u16,
 }
-impl Fraction {
-    fn into_f64(self) -> f64 {
+
+impl Into<f64> for Fraction {
+    fn into(self) -> f64 {
         (self.num as f64) / (self.den as f64)
-    }
-}
-impl Clone for Fraction {
-    fn clone(&self) -> Fraction {
-        *self
     }
 }
 
@@ -186,10 +191,11 @@ enum ErrorType {
     Absolute,
     Ratiometric,
 }
+
 impl fmt::Display for ErrorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ErrorType::Absolute    => write!(f, "Absolute"),
+            ErrorType::Absolute => write!(f, "Absolute"),
             ErrorType::Ratiometric => write!(f, "Ratiometric"),
         }
     }
@@ -201,15 +207,15 @@ enum SortOrder {
     RatiometricErrorWorstChannel,
     RatiometricErrorOnChannel(u8),
 }
+
 impl fmt::Display for SortOrder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SortOrder::RootMeanSquareError           =>
-                write!(f, "RootMeanSquareError"),
-            SortOrder::RatiometricErrorWorstChannel  =>
-                write!(f, "RatiometricErrorWorstChannel"),
-            SortOrder::RatiometricErrorOnChannel(ch) =>
-                write!(f, "RatiometricErrorOnChannel({})", ch),
+            SortOrder::RootMeanSquareError => write!(f, "RootMeanSquareError"),
+            SortOrder::RatiometricErrorWorstChannel => write!(f, "RatiometricErrorWorstChannel"),
+            SortOrder::RatiometricErrorOnChannel(ch) => {
+                write!(f, "RatiometricErrorOnChannel({})", ch)
+            }
         }
     }
 }
@@ -230,10 +236,14 @@ struct Requirements {
     chan_divider_min: Vec<Fraction>,
     chan_divider_max: Vec<Fraction>,
 }
+
 impl TryFrom<Opt> for Requirements {
     type Error = &'static str;
 
+    // Try to refactor this to use no `mut` variables, or at most a few.
     fn try_from(opt: Opt) -> Result<Self, Self::Error> {
+        // This isn't C. Also mutable variables are almost always a mistake, they should be needed
+        // very, very rarely (see sort_order example below).
         let mut error_type = ErrorType::Ratiometric;
         let mut sort_order = SortOrder::RootMeanSquareError;
 
@@ -255,34 +265,58 @@ impl TryFrom<Opt> for Requirements {
             sort_order = SortOrder::RatiometricErrorWorstChannel;
         }
 
+        // Don't forget that Rust is expression oriented, so you can do cool stuff like this.
+        let mut sort_order = {
+            if opt.sort_by_rmse {
+                SortOrder::RootMeanSquareError
+            } else if opt.sort_by_worst {
+                SortOrder::RatiometricErrorWorstChannel
+            } else {
+                SortOrder::RootMeanSquareError
+            }
+        };
+
         // What hardware are we targetting?  Apply associated limits.
         if opt.use_mmcm && opt.use_pll {
             return Err("must specify exactly one target");
-        } else if opt.use_mmcm {
+        }
+
+        // You can use the same trick to turn this entire block into an expression that creates the
+        // correct Requirements instance.
+        if opt.use_mmcm {
             max_outputs = 8;
-            vco_divider_num_min = Fraction { num:  2 * 8, den: 8 };
-            vco_divider_num_max = Fraction { num: 64 * 8, den: 8 };
-            vco_divider_den_min =   1;
+            vco_divider_num_min = Fraction { num: 2 * 8, den: 8 };
+            vco_divider_num_max = Fraction {
+                num: 64 * 8,
+                den: 8,
+            };
+            vco_divider_den_min = 1;
             vco_divider_den_max = 106;
             vco_megahz_max = 1200_f64;
-            vco_megahz_min =  600_f64;
-            chan_divider_min.push(Fraction { num:   1 * 8, den: 8});
-            chan_divider_max.push(Fraction { num: 128 * 8, den: 8});
+            vco_megahz_min = 600_f64;
+            chan_divider_min.push(Fraction { num: 1 * 8, den: 8 });
+            chan_divider_max.push(Fraction {
+                num: 128 * 8,
+                den: 8,
+            });
             for _ in 1..max_outputs {
-                chan_divider_min.push(Fraction { num:   1, den: 1});
-                chan_divider_max.push(Fraction { num: 128, den: 1});
+                chan_divider_min.push(Fraction { num: 1, den: 1 });
+                chan_divider_max.push(Fraction { num: 128, den: 1 });
             }
         } else if opt.use_pll {
             max_outputs = 2;
-            vco_divider_num_min = Fraction { num:  2 * 8, den: 8 };
-            vco_divider_num_max = Fraction { num: 64 * 8, den: 8 };
-            vco_divider_den_min =   1;
+            vco_divider_num_min = Fraction { num: 2 * 8, den: 8 };
+            vco_divider_num_max = Fraction {
+                num: 64 * 8,
+                den: 8,
+            };
+            vco_divider_den_min = 1;
             vco_divider_den_max = 106;
             vco_megahz_max = 1200_f64;
-            vco_megahz_min =  600_f64;
+            vco_megahz_min = 600_f64;
             for _ in 0..max_outputs {
-                chan_divider_min.push(Fraction { num: 128, den: 1});
-                chan_divider_max.push(Fraction { num: 128, den: 1});
+                chan_divider_min.push(Fraction { num: 128, den: 1 });
+                chan_divider_max.push(Fraction { num: 128, den: 1 });
             }
         } else {
             return Err("must specify exactly one target");
@@ -302,12 +336,14 @@ impl TryFrom<Opt> for Requirements {
                 Ok(constraint) => {
                     if let OutputConstraint::Equal(_) = constraint {
                         if opt.sort_by_rmse || opt.sort_by_worst {
-                            return Err("Can't constrain an output to eq when a sort order is specified");
+                            return Err(
+                                "Can't constrain an output to eq when a sort order is specified",
+                            );
                         }
                         sort_order = SortOrder::RatiometricErrorOnChannel(ii as u8);
                     }
                     output_constraints.push(constraint)
-                },
+                }
                 Err(err_str) => return Err(&err_str),
             }
         }
@@ -330,13 +366,22 @@ impl TryFrom<Opt> for Requirements {
         })
     }
 }
+
 impl fmt::Display for Requirements {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "error_type         : {}", self.error_type)?;
         writeln!(f, "sort_order         : {}", self.sort_order)?;
         writeln!(f, "max_solutions      : {}", self.max_solutions)?;
-        writeln!(f, "vco_divider_num_min: {}", self.vco_divider_num_min.into_f64())?;
-        writeln!(f, "vco_divider_num_max: {}", self.vco_divider_num_max.into_f64())?;
+        writeln!(
+            f,
+            "vco_divider_num_min: {}",
+            Into::<f64>::into(self.vco_divider_num_min)
+        )?;
+        writeln!(
+            f,
+            "vco_divider_num_max: {}",
+            Into::<f64>::into(self.vco_divider_num_max)
+        )?;
         writeln!(f, "vco_divider_den_min: {}", self.vco_divider_den_min)?;
         writeln!(f, "vco_divider_den_max: {}", self.vco_divider_den_max)?;
         writeln!(f, "vco_megahz_max     : {}", self.vco_megahz_max)?;
@@ -344,20 +389,21 @@ impl fmt::Display for Requirements {
         writeln!(f, "inp_megahz         : {}", self.inp_megahz)?;
         for (ii, constraint) in self.output_constraints.iter().enumerate() {
             match constraint {
-                OutputConstraint::Normal(target) =>
-                    writeln!(f, "output{:02}:   {}", ii, *target),
-                OutputConstraint::RangeInclusive { min, max } =>
-                    writeln!(f, "output{:02}:   {}-{}", ii, *min, *max),
-                OutputConstraint::LessThan(target) =>
-                    writeln!(f, "output{:02}: < {}", ii, *target),
-                OutputConstraint::LessThanOrEqual(target) =>
-                    writeln!(f, "output{:02}: <={}", ii, *target),
-                OutputConstraint::Equal(target) =>
-                    writeln!(f, "output{:02}:  ={}", ii, *target),
-                OutputConstraint::GreaterThanOrEqual(target) =>
-                    writeln!(f, "output{:02}: >={}", ii, *target),
-                OutputConstraint::GreaterThan(target) =>
-                    writeln!(f, "output{:02}: > {}", ii, *target),
+                OutputConstraint::Normal(target) => writeln!(f, "output{:02}:   {}", ii, *target),
+                OutputConstraint::RangeInclusive { min, max } => {
+                    writeln!(f, "output{:02}:   {}-{}", ii, *min, *max)
+                }
+                OutputConstraint::LessThan(target) => writeln!(f, "output{:02}: < {}", ii, *target),
+                OutputConstraint::LessThanOrEqual(target) => {
+                    writeln!(f, "output{:02}: <={}", ii, *target)
+                }
+                OutputConstraint::Equal(target) => writeln!(f, "output{:02}:  ={}", ii, *target),
+                OutputConstraint::GreaterThanOrEqual(target) => {
+                    writeln!(f, "output{:02}: >={}", ii, *target)
+                }
+                OutputConstraint::GreaterThan(target) => {
+                    writeln!(f, "output{:02}: > {}", ii, *target)
+                }
             }?;
         }
         Ok(())
@@ -374,6 +420,7 @@ struct VcoSolution {
     numerator: Fraction,
     denominator: u16,
 }
+
 impl VcoSolution {
     fn get_solutions(reqs: &Requirements) -> Vec<VcoSolution> {
         let vco_divider_num_den = reqs.vco_divider_num_min.den;
@@ -408,7 +455,12 @@ impl VcoSolution {
                     0,
                 ) as u16,
             );
-            log::trace!("in_num {}, in_den_min {}, in_den_max {}", in_num, in_den_min, in_den_max);
+            log::trace!(
+                "in_num {}, in_den_min {}, in_den_max {}",
+                in_num,
+                in_den_min,
+                in_den_max
+            );
 
             for in_den in in_den_min..=in_den_max {
                 let vco = reqs.inp_megahz * vco_divider_num_f64 / (in_den as f64);
@@ -436,17 +488,19 @@ impl VcoSolution {
                 }
 
                 let thresh = 1_f64 + 1e-9; // magic number for vco frequency equality threshold
-                let found = vco_solns.iter().find(|&x|
-                    ((x.output / vco) < thresh) &&
-                    ((vco / x.output) < thresh)
-                );
+                let found = vco_solns
+                    .iter()
+                    .find(|&x| ((x.output / vco) < thresh) && ((vco / x.output) < thresh));
                 match found {
                     Some(_) => (),
                     None => {
-                        vco_solns.push(VcoSolution{
+                        vco_solns.push(VcoSolution {
                             input: reqs.inp_megahz,
                             output: vco,
-                            numerator: Fraction{ num: in_num, den: vco_divider_num_den },
+                            numerator: Fraction {
+                                num: in_num,
+                                den: vco_divider_num_den,
+                            },
                             denominator: in_den,
                         });
                     }
@@ -471,13 +525,14 @@ struct ChannelSolution {
     absolute_error: f64,
     ratiometric_error: f64,
 }
+
 impl ChannelSolution {
     fn try_solve(
         vco: f64,
         chan_idx: u8,
         constraint: &OutputConstraint,
         divider_min: Fraction,
-        divider_max: Fraction
+        divider_max: Fraction,
     ) -> Result<ChannelSolution, String> {
         let den = divider_min.den;
         let den_f64 = den as f64;
@@ -494,14 +549,21 @@ impl ChannelSolution {
         // get closest integer solution
         let num = (vco * den_f64 / target).round() as u16;
         // check num + -1..=+1 solutions
-        let num_candidates = vec![num-1, num, num+1];
+        let num_candidates = vec![num - 1, num, num + 1];
 
+        // No. Just no. Make a struct lol.
         let mut num_tuples = Vec::<(u16, f64, f64, f64, f64)>::new();
         for num in num_candidates {
             if (num < divider_min.num) || (num > divider_max.num) {
-                log::trace!("vco {}, dev {:.3} -- disqualified {} < {} || {} > {}",
-                        vco, Fraction {num, den}.into_f64(),
-                        num, divider_min.num, num, divider_max.num);
+                log::trace!(
+                    "vco {}, dev {:.3} -- disqualified {} < {} || {} > {}",
+                    vco,
+                    Into::<f64>::into(Fraction { num, den }),
+                    num,
+                    divider_min.num,
+                    num,
+                    divider_max.num
+                );
                 continue;
             }
 
@@ -510,8 +572,12 @@ impl ChannelSolution {
             let absolute_error = error.abs();
             let ratiometric_error = (error / target).abs();
 
-            log::trace!("vco {}, dev {:.3}, out {}",
-                        vco, Fraction {num, den}.into_f64(), actual);
+            log::trace!(
+                "vco {}, dev {:.3}, out {}",
+                vco,
+                Into::<f64>::into(Fraction { num, den }),
+                actual
+            );
 
             // check output range constraints
             match constraint {
@@ -540,7 +606,7 @@ impl ChannelSolution {
                         continue;
                     }
                 }
-                _ => ()
+                _ => (),
             }
             num_tuples.push((num, actual, error, absolute_error, ratiometric_error));
         }
@@ -579,17 +645,21 @@ struct SolutionSet {
     sort_order: SortOrder,
     solutions: Vec<Solution>,
 }
+
 impl SolutionSet {
     fn from(reqs: Requirements) -> Self {
         // Generate candidate solutions
         let vco_solns = VcoSolution::get_solutions(&reqs);
         let mut solutions = Vec::<Solution>::new();
+
+        // Already using labels, look at you, so fancy!
         'vco: for VcoSolution {
             input,
             output: vco_freq,
             numerator,
             denominator,
-        } in &vco_solns {
+        } in &vco_solns
+        {
             // Solve each output channel
             let mut channel_solutions = Vec::<ChannelSolution>::new();
             let mut mse = 0_f64;
@@ -601,7 +671,7 @@ impl SolutionSet {
                     chan as u8,
                     &constraint,
                     reqs.chan_divider_min[chan],
-                    reqs.chan_divider_max[chan]
+                    reqs.chan_divider_max[chan],
                 ) {
                     Ok(soln) => {
                         mse += soln.absolute_error * soln.absolute_error;
@@ -614,7 +684,7 @@ impl SolutionSet {
                             max_err_chan = chan;
                         }
                         channel_solutions.push(soln);
-                    },
+                    }
                     Err(_) => continue 'vco,
                 }
             }
@@ -636,18 +706,22 @@ impl SolutionSet {
         // Sort and trim
         match reqs.sort_order {
             SortOrder::RootMeanSquareError => {
-                solutions.sort_by(|a, b|
-                    a.root_mean_square_error.partial_cmp(&b.root_mean_square_error).unwrap());
+                solutions.sort_by(|a, b| {
+                    a.root_mean_square_error
+                        .partial_cmp(&b.root_mean_square_error)
+                        .unwrap()
+                });
             }
             SortOrder::RatiometricErrorWorstChannel => {
                 solutions.sort_by(|a, b| a.worst_error.partial_cmp(&b.worst_error).unwrap());
             }
             SortOrder::RatiometricErrorOnChannel(ch) => {
-                solutions.sort_by(|a, b|
-                    a.channel_solutions[ch as usize].ratiometric_error.partial_cmp(
-                        &b.channel_solutions[ch as usize].ratiometric_error
-                    ).unwrap()
-               );
+                solutions.sort_by(|a, b| {
+                    a.channel_solutions[ch as usize]
+                        .ratiometric_error
+                        .partial_cmp(&b.channel_solutions[ch as usize].ratiometric_error)
+                        .unwrap()
+                });
             }
         };
         solutions.truncate(reqs.max_solutions);
@@ -659,6 +733,7 @@ impl SolutionSet {
         }
     }
 }
+
 impl fmt::Display for SolutionSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.solutions.is_empty() {
@@ -668,18 +743,21 @@ impl fmt::Display for SolutionSet {
 
             //-- Table Annotation
             match self.sort_order {
-                SortOrder::RootMeanSquareError =>
-                    writeln!(f, "Sorting in order of increasing root_mean_square_error"),
-                SortOrder::RatiometricErrorWorstChannel =>
-                    writeln!(f, "Sorting in order of increasing ppm_err_max"),
-                SortOrder::RatiometricErrorOnChannel(ch) =>
-                    writeln!(f, "Sorting in order of increasing error on channel {}", ch),
-            }?;3
+                SortOrder::RootMeanSquareError => {
+                    writeln!(f, "Sorting in order of increasing root_mean_square_error")
+                }
+                SortOrder::RatiometricErrorWorstChannel => {
+                    writeln!(f, "Sorting in order of increasing ppm_err_max")
+                }
+                SortOrder::RatiometricErrorOnChannel(ch) => {
+                    writeln!(f, "Sorting in order of increasing error on channel {}", ch)
+                }
+            }?;
             match self.error_type {
-                ErrorType::Absolute =>
-                    writeln!(f, "Worst absolute output in {}", "red".red()),
-                ErrorType::Ratiometric =>
-                    writeln!(f, "Worst ratiomnetric output in {}", "red".red()),
+                ErrorType::Absolute => writeln!(f, "Worst absolute output in {}", "red".red()),
+                ErrorType::Ratiometric => {
+                    writeln!(f, "Worst ratiomnetric output in {}", "red".red())
+                }
             }?;
             writeln!(f)?;
 
@@ -712,10 +790,14 @@ impl fmt::Display for SolutionSet {
                 }
                 write!(f, " {:>13.3}", 1e6 * soln.worst_error)?;
                 write!(f, " {:>13.6}", soln.root_mean_square_error)?;
-                write!(f, " {:>6.3}", soln.vco_solution.numerator.into_f64())?;
+                write!(
+                    f,
+                    " {:>6.3}",
+                    Into::<f64>::into(soln.vco_solution.numerator)
+                )?;
                 write!(f, " {:>6}", soln.vco_solution.denominator as f64)?;
                 for chan_soln in &soln.channel_solutions {
-                    write!(f, " {:6.3}", chan_soln.divider.into_f64())?;
+                    write!(f, " {:6.3}", Into::<f64>::into(chan_soln.divider))?;
                 }
             }
 
@@ -770,12 +852,12 @@ mod tests {
 
         let reqs = Requirements::from(opt);
 
-        assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , max_solutions);
-        assert_eq!(reqs.max_outputs     ,        8);
-        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
-        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
-        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.valid, true);
+        assert_eq!(reqs.max_solutions, max_solutions);
+        assert_eq!(reqs.max_outputs, 8);
+        assert_eq!(reqs.vco_megahz_max, 1200_f64);
+        assert_eq!(reqs.vco_megahz_min, 600_f64);
+        assert_eq!(reqs.inp_megahz, inp_megahz);
         assert_eq!(reqs.output_constraints.len(), num_outputs);
         Ok(())
     }
@@ -795,12 +877,12 @@ mod tests {
 
         let reqs = Requirements::from(opt);
 
-        assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , max_solutions);
-        assert_eq!(reqs.max_outputs     ,        2);
-        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
-        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
-        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.valid, true);
+        assert_eq!(reqs.max_solutions, max_solutions);
+        assert_eq!(reqs.max_outputs, 2);
+        assert_eq!(reqs.vco_megahz_max, 1200_f64);
+        assert_eq!(reqs.vco_megahz_min, 600_f64);
+        assert_eq!(reqs.inp_megahz, inp_megahz);
         assert_eq!(reqs.output_constraints.len(), num_outputs);
         Ok(())
     }
@@ -820,14 +902,14 @@ mod tests {
 
         let reqs = Requirements::from(opt);
 
-        assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , max_solutions);
-        assert_eq!(reqs.max_outputs     ,        2);
-        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
-        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
-        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.valid, true);
+        assert_eq!(reqs.max_solutions, max_solutions);
+        assert_eq!(reqs.max_outputs, 2);
+        assert_eq!(reqs.vco_megahz_max, 1200_f64);
+        assert_eq!(reqs.vco_megahz_min, 600_f64);
+        assert_eq!(reqs.inp_megahz, inp_megahz);
         assert_eq!(reqs.output_constraints.len(), num_outputs);
-        if let OutputConstraint::RangeInclusive { min, max, } = reqs.output_constraints[1] {
+        if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
             assert!((min - 181.1).abs() < 1e-6);
             assert!((max - 188.8).abs() < 1e-6);
             Ok(())
@@ -851,14 +933,14 @@ mod tests {
 
         let reqs = Requirements::from(opt);
 
-        assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , max_solutions);
-        assert_eq!(reqs.max_outputs     ,        2);
-        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
-        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
-        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.valid, true);
+        assert_eq!(reqs.max_solutions, max_solutions);
+        assert_eq!(reqs.max_outputs, 2);
+        assert_eq!(reqs.vco_megahz_max, 1200_f64);
+        assert_eq!(reqs.vco_megahz_min, 600_f64);
+        assert_eq!(reqs.inp_megahz, inp_megahz);
         assert_eq!(reqs.output_constraints.len(), num_outputs);
-        if let OutputConstraint::RangeInclusive { min, max, } = reqs.output_constraints[1] {
+        if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
             assert!((min - (181.1 * 0.991)).abs() < 1e-6);
             assert!((max - (181.1 * 1.009)).abs() < 1e-6);
             Ok(())
@@ -882,14 +964,14 @@ mod tests {
 
         let reqs = Requirements::from(opt);
 
-        assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , max_solutions);
-        assert_eq!(reqs.max_outputs     ,        2);
-        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
-        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
-        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.valid, true);
+        assert_eq!(reqs.max_solutions, max_solutions);
+        assert_eq!(reqs.max_outputs, 2);
+        assert_eq!(reqs.vco_megahz_max, 1200_f64);
+        assert_eq!(reqs.vco_megahz_min, 600_f64);
+        assert_eq!(reqs.inp_megahz, inp_megahz);
         assert_eq!(reqs.output_constraints.len(), num_outputs);
-        if let OutputConstraint::RangeInclusive { min, max, } = reqs.output_constraints[1] {
+        if let OutputConstraint::RangeInclusive { min, max } = reqs.output_constraints[1] {
             assert!((min - (181.1 * (1_f64 - 3.5e-6))).abs() < 1e-6);
             assert!((max - (181.1 * (1_f64 + 3.5e-6))).abs() < 1e-6);
             Ok(())
