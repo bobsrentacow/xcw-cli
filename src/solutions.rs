@@ -113,6 +113,24 @@ impl VcoSolution {
     }
 }
 
+impl PartialEq for VcoSolution {
+    fn eq(&self, other: &Self) -> bool {
+        if (self.input - other.input).abs() > 1e-6 {
+            return false;
+        }
+        if (self.output - other.output).abs() > 1e-6 {
+            return false;
+        }
+        if !self.numerator.eq(&other.numerator) {
+            return false;
+        }
+        if self.denominator != other.denominator {
+            return false;
+        }
+        return true;
+    }
+}
+
 #[derive(Debug)]
 struct ChannelSolution {
     input: f64,
@@ -211,7 +229,7 @@ impl ChannelSolution {
 
         if !num_tuples.is_empty() {
             num_tuples.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap());
-            let (num, actual, error, absolute_error, ratiometric_error) = num_tuples[0];
+            let (num, actual, _error, absolute_error, ratiometric_error) = num_tuples[0];
 
             Ok(ChannelSolution {
                 input: vco,
@@ -228,6 +246,33 @@ impl ChannelSolution {
     }
 }
 
+impl PartialEq for ChannelSolution {
+    fn eq(&self, other: &Self) -> bool {
+        if (self.input - other.input) > 1e-6 {
+            return false;
+        }
+        if self.chan_idx != other.chan_idx {
+            return false;
+        }
+        if !self.divider.eq(&other.divider) {
+            return false;
+        }
+        if (self.target - other.target) > 1e-6 {
+            return false;
+        }
+        if (self.actual - other.actual) > 1e-6 {
+            return false;
+        }
+        if (self.absolute_error - other.absolute_error) > 1e-6 {
+            return false;
+        }
+        if (self.ratiometric_error - other.ratiometric_error) > 1e-6 {
+            return false;
+        }
+        return true;
+    }
+}
+
 #[derive(Debug)]
 struct Solution {
     vco_solution: VcoSolution,
@@ -235,6 +280,75 @@ struct Solution {
     root_mean_square_error: f64,
     worst_error: f64,
     channel_with_worst_error: u8,
+}
+
+impl fmt::Display for Solution {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:>12.6}", self.vco_solution.output)?;
+        for (ii, chan_soln) in self.channel_solutions.iter().enumerate() {
+            let mut str_megahz: String = format!(" {:>13.6}", chan_soln.actual);
+            if ii == (self.channel_with_worst_error as usize) {
+                str_megahz = str_megahz.red().to_string();
+            }
+            write!(f, "{}", str_megahz)?;
+        }
+        write!(f, " {:>13.3}", 1e6 * self.worst_error)?;
+        write!(f, " {:>13.6}", self.root_mean_square_error)?;
+        write!(
+            f,
+            " {:>6.3}",
+            Into::<f64>::into(self.vco_solution.numerator)
+        )?;
+        write!(f, " {:>6}", self.vco_solution.denominator as f64)?;
+        for chan_soln in &self.channel_solutions {
+            write!(f, " {:6.3}", Into::<f64>::into(chan_soln.divider))?;
+        }
+
+        write!(f, "")
+    }
+}
+
+fn solution_header(num_outputs: usize, error_type: &ErrorType) -> String {
+    let mut res = format!("{:>12}", "vco");
+    for ii in 0..num_outputs {
+        res.push_str(&format!(" {:>12}{:1}", "MHz", ii));
+    }
+    match error_type {
+        ErrorType::Absolute => res.push_str(&format!(" {:>13}", "MHz_err_max")),
+        ErrorType::Ratiometric => res.push_str(&format!(" {:>13}", "ppm_err_max")),
+    };
+    res.push_str(&format!(" {:>13} {:>6} {:>6}", "rms_err(MHz)", "clkfb", "divclk"));
+    for ii in 0..num_outputs {
+        res.push_str(&format!(" {:>5}{:1}", "odiv", ii));
+    }
+
+    res
+}
+
+impl PartialEq for Solution {
+    fn eq(&self, other: &Self) -> bool {
+        if !self.vco_solution.eq(&other.vco_solution) {
+            return false;
+        }
+        if !(self.channel_solutions.len() == other.channel_solutions.len()) {
+            return false;
+        }
+        for (ii, chan_soln) in self.channel_solutions.iter().enumerate() {
+            if !chan_soln.eq(&other.channel_solutions[ii]) {
+                return false;
+            }
+        }
+        if (self.root_mean_square_error - other.root_mean_square_error).abs() > 1e-6 {
+            return false;
+        }
+        if (self.worst_error - other.worst_error).abs() > 1e-6 {
+            return false;
+        }
+        if self.channel_with_worst_error != other.channel_with_worst_error {
+            return false;
+        }
+        return true;
+    }
 }
 
 #[derive(Debug)]
@@ -360,43 +474,11 @@ impl fmt::Display for SolutionSet {
             writeln!(f)?;
 
             //-- Header
-            write!(f, "{:>5} {:>12}", "sln#", "vco")?;
-            for ii in 0..num_outputs {
-                write!(f, " {:>12}{:1}", "MHz", ii)?;
-            }
-            match self.error_type {
-                ErrorType::Absolute => write!(f, " {:>13}", "MHz_err_max"),
-                ErrorType::Ratiometric => write!(f, " {:>13}", "ppm_err_max"),
-            }?;
-            write!(f, " {:>13}", "rms_err(MHz)")?;
-            write!(f, " {:>6}", "clkfb")?;
-            write!(f, " {:>6}", "divclk")?;
-            for ii in 0..num_outputs {
-                write!(f, " {:>5}{:1}", "odiv", ii)?;
-            }
+            writeln!(f, "{:>5} {}", "sln#", solution_header(num_outputs, &self.error_type))?;
 
             //-- Solutions
             for (ii, soln) in self.solutions.iter().enumerate() {
-                writeln!(f)?;
-                write!(f, "{:>5} {:>12.6}", ii, soln.vco_solution.output)?;
-                for chan_soln in &soln.channel_solutions {
-                    let mut str_megahz: String = format!(" {:>13.6}", chan_soln.actual);
-                    if ii == (soln.channel_with_worst_error as usize) {
-                        str_megahz = str_megahz.red().to_string();
-                    }
-                    write!(f, "{}", str_megahz)?;
-                }
-                write!(f, " {:>13.3}", 1e6 * soln.worst_error)?;
-                write!(f, " {:>13.6}", soln.root_mean_square_error)?;
-                write!(
-                    f,
-                    " {:>6.3}",
-                    Into::<f64>::into(soln.vco_solution.numerator)
-                )?;
-                write!(f, " {:>6}", soln.vco_solution.denominator as f64)?;
-                for chan_soln in &soln.channel_solutions {
-                    write!(f, " {:6.3}", Into::<f64>::into(chan_soln.divider))?;
-                }
+                writeln!(f, "{:>5} {}", ii, soln)?;
             }
 
             write!(f, "")
@@ -410,6 +492,142 @@ impl fmt::Display for SolutionSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::convert::TryFrom;
+    use crate::cli_args::Opt;
 
-    // TODO: add many tests
+    #[test]
+    fn test_mmcm_156p25_164p4_210p1() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: true,
+            use_pll: false,
+            sort_by_rmse: false,
+            sort_by_worst: false,
+            max_solutions: 32,
+            inp_megahz: 156.25,
+            output_specifiers: vec![String::from("164.4"), String::from("210.1")],
+        };
+        let max_solutions = opt.max_solutions;
+
+        match Requirements::try_from(opt) {
+            Err(_) => Err(String::from("failed to parse requirements from opt")),
+            Ok(reqs) => {
+                let set = SolutionSet::from(reqs);
+                assert_eq!(set.error_type, ErrorType::Ratiometric);
+                assert_eq!(set.sort_order, SortOrder::RootMeanSquareError);
+                if set.solutions.len() > max_solutions {
+                    return Err(String::from("more solutions returned than requested"));
+                }
+                if !set.solutions[0].eq(&Solution {
+                    vco_solution: VcoSolution {
+                        input: 156.25,
+                        output: 1049.8046875,
+                        numerator: Fraction { num: 215, den: 8 },
+                        denominator: 4,
+                    },
+                    channel_solutions: vec![
+                        ChannelSolution {
+                            input: 1049.8046875,
+                            chan_idx: 0,
+                            divider: Fraction { num: 51, den: 8 },
+                            target: 164.4,
+                            actual: 164.67524509803923,
+                            absolute_error: 0.27524509803922115,
+                            ratiometric_error: 0.001674240255713024,
+                        },
+                        ChannelSolution {
+                            input: 1049.8046875,
+                            chan_idx: 1,
+                            divider: Fraction { num: 5, den: 1 },
+                            target: 210.1,
+                            actual: 209.9609375,
+                            absolute_error: 0.13906249999999432,
+                            ratiometric_error: 0.0006618871965730335,
+                        },
+                    ],
+                    root_mean_square_error: 0.3083800299968675,
+                    worst_error: 0.001674240255713024,
+                    channel_with_worst_error: 0,
+                }) {
+                    println!("{}", solution_header(set.solutions[0].channel_solutions.len(), &set.error_type));
+                    println!("{}", set.solutions[0]);
+                    println!("{:?}", set.solutions[0].vco_solution);
+                    println!("{:?}", set.solutions[0].channel_solutions);
+                    println!("{:?}", set.solutions[0].root_mean_square_error);
+                    println!("{:?}", set.solutions[0].worst_error);
+                    println!("{:?}", set.solutions[0].channel_with_worst_error);
+                    return Err(format!("Solution is different than when test was written"));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn test_mmcm_156p25_164p4_210p1_to_210p9() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: true,
+            use_pll: false,
+            sort_by_rmse: false,
+            sort_by_worst: false,
+            max_solutions: 32,
+            inp_megahz: 156.25,
+            output_specifiers: vec![String::from("164.4"), String::from("210.1-210.9")],
+        };
+        let max_solutions = opt.max_solutions;
+
+        match Requirements::try_from(opt) {
+            Err(_) => Err(String::from("failed to parse requirements from opt")),
+            Ok(reqs) => {
+                let set = SolutionSet::from(reqs);
+                assert_eq!(set.error_type, ErrorType::Ratiometric);
+                assert_eq!(set.sort_order, SortOrder::RootMeanSquareError);
+                if set.solutions.len() > max_solutions {
+                    return Err(String::from("more solutions returned than requested"));
+                }
+                if !set.solutions[0].eq(&Solution {
+                    vco_solution: VcoSolution {
+                        input: 156.25,
+                        output: 842.28515625,
+                        numerator: Fraction { num: 345, den: 8 },
+                        denominator: 8,
+                    },
+                    channel_solutions: vec![
+                        ChannelSolution {
+                            input: 842.28515625,
+                            chan_idx: 0,
+                            divider: Fraction { num: 41, den: 8 },
+                            target: 164.4,
+                            actual: 164.3483231707317,
+                            absolute_error: 0.05167682926830253,
+                            ratiometric_error: 0.0003143359444543949,
+                        },
+                        ChannelSolution {
+                            input: 842.28515625,
+                            chan_idx: 1,
+                            divider: Fraction { num: 4, den: 1 },
+                            target: 210.5,
+                            actual: 210.5712890625,
+                            absolute_error: 0.0712890625,
+                            ratiometric_error: 0.00033866538004750593,
+                        },
+                    ],
+                    root_mean_square_error: 0.08804899269925917,
+                    worst_error: 0.00033866538004750593,
+                    channel_with_worst_error: 1,
+                }) {
+                    println!("{}", solution_header(set.solutions[0].channel_solutions.len(), &set.error_type));
+                    println!("{}", set.solutions[0]);
+                    println!("{:?}", set.solutions[0].vco_solution);
+                    println!("{:?}", set.solutions[0].channel_solutions);
+                    println!("{:?}", set.solutions[0].root_mean_square_error);
+                    println!("{:?}", set.solutions[0].worst_error);
+                    println!("{:?}", set.solutions[0].channel_with_worst_error);
+                    return Err(format!("Solution is different than when test was written"));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    // TODO: test other OutputConstraints
 }
