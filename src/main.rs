@@ -66,7 +66,10 @@ impl From<Opt> for Requirements {
             inp_megahz: opt.inp_megahz,
             out_megahz: Vec::<OutputConstraint>::new(),
         };
-        if opt.use_mmcm {
+        if opt.use_mmcm && opt.use_pll {
+            reqs.valid = false;
+            return reqs;
+        } else if opt.use_mmcm {
             reqs.valid = true;
             reqs.max_outputs = 8;
             reqs.vco_megahz_max = 1200_f64;
@@ -546,4 +549,166 @@ fn main() {
     println!("{}", SolutionSet::from(Requirements::from(Opt::from_args())));
 }
 
-// TODO: add a test or 20
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_requirements_from_opt_use_mmcm_and_pll() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: true,
+            use_pll: true,
+            num_solutions: 32,
+            inp_megahz: 156.25,
+            out_megahz: vec![String::from("166.6"), String::from("gte187.5")],
+        };
+        let reqs = Requirements::from(opt);
+        assert_eq!(reqs.valid, false);
+        Ok(())
+    }
+
+    #[test]
+    fn test_requirements_from_opt_use_mmcm() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: true,
+            use_pll: false,
+            num_solutions: 32,
+            inp_megahz: 156.25,
+            out_megahz: vec![String::from("166.6"), String::from("gte187.5")],
+        };
+        let num_solutions = opt.num_solutions;
+        let inp_megahz = opt.inp_megahz;
+        let num_outputs = opt.out_megahz.len();
+
+        let reqs = Requirements::from(opt);
+
+        assert_eq!(reqs.valid           , true);
+        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_outputs     ,        8);
+        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
+        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
+        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.out_megahz.len(), num_outputs);
+        Ok(())
+    }
+
+    #[test]
+    fn test_requirements_from_opt_use_pll() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: false,
+            use_pll: true,
+            num_solutions: 32,
+            inp_megahz: 156.25,
+            out_megahz: vec![String::from("166.6"), String::from("gte187.5")],
+        };
+        let num_solutions = opt.num_solutions;
+        let inp_megahz = opt.inp_megahz;
+        let num_outputs = opt.out_megahz.len();
+
+        let reqs = Requirements::from(opt);
+
+        assert_eq!(reqs.valid           , true);
+        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_outputs     ,        2);
+        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
+        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
+        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.out_megahz.len(), num_outputs);
+        Ok(())
+    }
+
+    #[test]
+    fn test_requirements_from_opt_range() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: false,
+            use_pll: true,
+            num_solutions: 32,
+            inp_megahz: 156.25,
+            out_megahz: vec![String::from("166.6"), String::from("181.1-188.8")],
+        };
+        let num_solutions = opt.num_solutions;
+        let inp_megahz = opt.inp_megahz;
+        let num_outputs = opt.out_megahz.len();
+
+        let reqs = Requirements::from(opt);
+
+        assert_eq!(reqs.valid           , true);
+        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_outputs     ,        2);
+        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
+        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
+        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.out_megahz.len(), num_outputs);
+        if let OutputConstraint::Range { min, max, } = reqs.out_megahz[1] {
+            assert!((min - 181.1).abs() < 1e-6);
+            assert!((max - 188.8).abs() < 1e-6);
+            Ok(())
+        } else {
+            Err(String::from("parsing error"))
+        }
+    }
+
+    #[test]
+    fn test_requirements_from_opt_range_pct() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: false,
+            use_pll: true,
+            num_solutions: 32,
+            inp_megahz: 156.25,
+            out_megahz: vec![String::from("166.6"), String::from("181.1+-0.9pct")],
+        };
+        let num_solutions = opt.num_solutions;
+        let inp_megahz = opt.inp_megahz;
+        let num_outputs = opt.out_megahz.len();
+
+        let reqs = Requirements::from(opt);
+
+        assert_eq!(reqs.valid           , true);
+        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_outputs     ,        2);
+        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
+        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
+        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.out_megahz.len(), num_outputs);
+        if let OutputConstraint::Range { min, max, } = reqs.out_megahz[1] {
+            assert!((min - (181.1 * 0.991)).abs() < 1e-6);
+            assert!((max - (181.1 * 1.009)).abs() < 1e-6);
+            Ok(())
+        } else {
+            Err(String::from("parsing error"))
+        }
+    }
+
+    #[test]
+    fn test_requirements_from_opt_range_ppm() -> Result<(), String> {
+        let opt = Opt {
+            use_mmcm: false,
+            use_pll: true,
+            num_solutions: 32,
+            inp_megahz: 156.25,
+            out_megahz: vec![String::from("166.6"), String::from("181.1+-3.5ppm")],
+        };
+        let num_solutions = opt.num_solutions;
+        let inp_megahz = opt.inp_megahz;
+        let num_outputs = opt.out_megahz.len();
+
+        let reqs = Requirements::from(opt);
+
+        assert_eq!(reqs.valid           , true);
+        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_outputs     ,        2);
+        assert_eq!(reqs.vco_megahz_max  , 1200_f64);
+        assert_eq!(reqs.vco_megahz_min  ,  600_f64);
+        assert_eq!(reqs.inp_megahz      , inp_megahz);
+        assert_eq!(reqs.out_megahz.len(), num_outputs);
+        if let OutputConstraint::Range { min, max, } = reqs.out_megahz[1] {
+            assert!((min - (181.1 * (1_f64 - 3.5e-6))).abs() < 1e-6);
+            assert!((max - (181.1 * (1_f64 + 3.5e-6))).abs() < 1e-6);
+            Ok(())
+        } else {
+            Err(String::from("parsing error"))
+        }
+    }
+
+    // TODO: add many tests
+}
