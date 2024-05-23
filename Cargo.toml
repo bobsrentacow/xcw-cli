@@ -1,0 +1,14 @@
+[package]
+name = "xcw-cli"
+version = "0.1.0"
+authors = ["Matt Mahin <matt.mahin@qsc.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+structopt = { version = "0.3", features = [ "paw" ] }
+paw = "1.0"
+libmath = "0.1.4"
+text_io = "0.1.8"
+colored = "1.9"
