@@ -7,7 +7,6 @@ use structopt::StructOpt;
 
 // TODO: Learn how to use the doc tool and add special comments
 
-// TODO: make the --help option useful
 #[derive(Debug, StructOpt)]
 #[structopt(name = "xilinx clock wizard", about = "How to calulate and display results")]
 struct Opt {
@@ -669,6 +668,7 @@ fn main() {
     }
 }
 
+// TODO: fix tests for the refactor that happened a few commits ago
 #[cfg(test)]
 mod tests {
     use super::*;
