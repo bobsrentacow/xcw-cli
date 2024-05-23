@@ -50,7 +50,8 @@ enum OutputConstraint {
     RangeInclusive { min: f64, max: f64 },
     LessThan(f64),
     LessThanOrEqual(f64),
-    Equal(f64), // mostly equivalent to Normal, but used to sort on a single channel of output error
+    // Use equal to sort on a single channel of output error
+    Equal(f64),
     GreaterThanOrEqual(f64),
     GreaterThan(f64),
 }
@@ -117,17 +118,19 @@ impl OutputConstraint {
                     max: target + tolerance,
                 })
             };
-        let try_scan_range = |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
-            let min: f64;
-            let max: f64;
-            text_io::try_scan!(string.bytes() => "{}-{}", min, max);
-            Ok(OutputConstraint::RangeInclusive { min, max })
-        };
-        let try_scan_normal = |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
-            let target: f64;
-            text_io::try_scan!(string.bytes() => "{}", target);
-            Ok(OutputConstraint::Normal(target))
-        };
+        let try_scan_range =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let min: f64;
+                let max: f64;
+                text_io::try_scan!(string.bytes() => "{}-{}", min, max);
+                Ok(OutputConstraint::RangeInclusive { min, max })
+            };
+        let try_scan_normal =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                text_io::try_scan!(string.bytes() => "{}", target);
+                Ok(OutputConstraint::Normal(target))
+            };
 
         // TODO: is there a more idiomatic way to do this in rust?
         if let Ok(res) = try_scan_less_than_or_equal(&the_string) {
@@ -160,7 +163,7 @@ impl OutputConstraint {
 // Requirements
 //   This should fully specify the problem we are trying to solve.
 
-// TODO: Couldn't figure out how to get Into<f64> working.  Need to understand more about the Into trait.
+// TODO: Couldn't figure out how to get Into<f64> working.
 #[derive(Debug, Copy)]
 struct Fraction {
     num: u16,
@@ -201,9 +204,12 @@ enum SortOrder {
 impl fmt::Display for SortOrder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SortOrder::RootMeanSquareError           => write!(f, "RootMeanSquareError"),
-            SortOrder::RatiometricErrorWorstChannel  => write!(f, "RatiometricErrorWorstChannel"),
-            SortOrder::RatiometricErrorOnChannel(ch) => write!(f, "RatiometricErrorOnChannel({})", ch),
+            SortOrder::RootMeanSquareError           =>
+                write!(f, "RootMeanSquareError"),
+            SortOrder::RatiometricErrorWorstChannel  =>
+                write!(f, "RatiometricErrorWorstChannel"),
+            SortOrder::RatiometricErrorOnChannel(ch) =>
+                write!(f, "RatiometricErrorOnChannel({})", ch),
         }
     }
 }
@@ -249,7 +255,7 @@ impl TryFrom<Opt> for Requirements {
             sort_order = SortOrder::RatiometricErrorWorstChannel;
         }
 
-        // What hardware are we targetting?  Apply limits associated with that hardware.
+        // What hardware are we targetting?  Apply associated limits.
         if opt.use_mmcm && opt.use_pll {
             return Err("must specify exactly one target");
         } else if opt.use_mmcm {
@@ -289,6 +295,7 @@ impl TryFrom<Opt> for Requirements {
 
         let mut output_constraints = Vec::<OutputConstraint>::new();
 
+        // TODO: reduce number of indentations
         // Figure out what constraints to apply for each requested output.
         for (ii, the_string) in opt.output_specifiers.iter().enumerate() {
             match OutputConstraint::try_parse(&the_string) {
@@ -372,14 +379,15 @@ impl VcoSolution {
         let vco_divider_num_den = reqs.vco_divider_num_min.den;
         let vco_divider_num_den_f64 = vco_divider_num_den as f64;
 
-        let in_num_min = cmp::max(
-            reqs.vco_divider_num_min.num,
-            round::ceil(reqs.vco_megahz_min * (reqs.vco_divider_den_min as f64) * vco_divider_num_den_f64 / reqs.inp_megahz, 0) as u16,
-        );
-        let in_num_max = cmp::min(
-            reqs.vco_divider_num_max.num,
-            round::floor(reqs.vco_megahz_max * (reqs.vco_divider_den_max as f64) * vco_divider_num_den_f64 / reqs.inp_megahz, 0) as u16,
-        );
+        let virtual_vco_pre_mult = reqs.vco_megahz_min * vco_divider_num_den_f64 / reqs.inp_megahz;
+
+        let min_num_in_vco_range =
+            round::ceil(virtual_vco_pre_mult * (reqs.vco_divider_den_min as f64), 0) as u16;
+        let max_num_in_vco_range =
+            round::floor(virtual_vco_pre_mult * (reqs.vco_divider_den_max as f64), 0) as u16;
+
+        let in_num_min = cmp::max(reqs.vco_divider_num_min.num, min_num_in_vco_range);
+        let in_num_max = cmp::min(reqs.vco_divider_num_max.num, max_num_in_vco_range);
         log::trace!("in_num_min {}, in_num_max {}", in_num_min, in_num_max);
 
         let mut vco_solns = Vec::<VcoSolution>::new();
@@ -428,7 +436,10 @@ impl VcoSolution {
                 }
 
                 let thresh = 1_f64 + 1e-9; // magic number for vco frequency equality threshold
-                let found = vco_solns.iter().find(|&x| ((x.output / vco) < thresh) && ((vco / x.output) < thresh));
+                let found = vco_solns.iter().find(|&x|
+                    ((x.output / vco) < thresh) &&
+                    ((vco / x.output) < thresh)
+                );
                 match found {
                     Some(_) => (),
                     None => {
@@ -579,8 +590,6 @@ impl SolutionSet {
             numerator,
             denominator,
         } in &vco_solns {
-            //log::trace!("vco {:4.6}, numerator {}, denominator {}, ", vco_freq, numerator.into_f64(), denominator);
-
             // Solve each output channel
             let mut channel_solutions = Vec::<ChannelSolution>::new();
             let mut mse = 0_f64;
@@ -627,7 +636,8 @@ impl SolutionSet {
         // Sort and trim
         match reqs.sort_order {
             SortOrder::RootMeanSquareError => {
-                solutions.sort_by(|a, b| a.root_mean_square_error.partial_cmp(&b.root_mean_square_error).unwrap());
+                solutions.sort_by(|a, b|
+                    a.root_mean_square_error.partial_cmp(&b.root_mean_square_error).unwrap());
             }
             SortOrder::RatiometricErrorWorstChannel => {
                 solutions.sort_by(|a, b| a.worst_error.partial_cmp(&b.worst_error).unwrap());
@@ -666,8 +676,10 @@ impl fmt::Display for SolutionSet {
                     writeln!(f, "Sorting in order of increasing error on channel {}", ch),
             }?;3
             match self.error_type {
-                ErrorType::Absolute => writeln!(f, "Worst absolute output in {}", "red".red()),
-                ErrorType::Ratiometric => writeln!(f, "Worst ratiomnetric output in {}", "red".red()),
+                ErrorType::Absolute =>
+                    writeln!(f, "Worst absolute output in {}", "red".red()),
+                ErrorType::Ratiometric =>
+                    writeln!(f, "Worst ratiomnetric output in {}", "red".red()),
             }?;
             writeln!(f)?;
 
