@@ -1,6 +1,7 @@
 use colored::Colorize;
 use math::round;
 use std::cmp;
+use std::convert::TryFrom;
 use std::fmt;
 use structopt::StructOpt;
 
@@ -13,14 +14,20 @@ struct Opt {
     /// Select MMCM mode
     #[structopt(short = "m", long = "mmcm")]
     use_mmcm: bool,
-
     /// Select PLL mode
     #[structopt(short = "p", long = "pll")]
     use_pll: bool,
 
+    /// Sort by root_mean_square_error
+    #[structopt(short = "r", long = "rmse")]
+    sort_by_rmse: bool,
+    /// Sort by worst_ratiometric_error
+    #[structopt(short = "w", long = "worst")]
+    sort_by_worst: bool,
+
     /// Specify number of displayed solutions
-    #[structopt(short = "s", long = "num_solutions", default_value = "32")]
-    num_solutions: usize,
+    #[structopt(short = "n", long = "max_solutions", default_value = "32")]
+    max_solutions: usize,
 
     /// Input frequency
     #[structopt(name = "inp_MHz")]
@@ -28,8 +35,11 @@ struct Opt {
 
     /// Output frequencies
     #[structopt(name = "out_MHz")]
-    out_megahz: Vec<String>,
+    output_specifiers: Vec<String>,
 }
+
+//----
+// OutputConstraint
 
 enum OutputConstraint {
     Normal(f64),
@@ -40,210 +50,307 @@ enum OutputConstraint {
     GreaterThanOrEqual(f64),
     GreaterThan(f64),
 }
+impl OutputConstraint {
+    fn try_parse(the_string: &str) -> Result<Self, &'static str> {
+        // text_io parsers
+        let try_scan_less_than_or_equal =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                text_io::try_scan!(string.bytes() => "lte{}", target);
+                Ok(OutputConstraint::LessThanOrEqual(target))
+            };
+        let try_scan_less_than =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                text_io::try_scan!(string.bytes() => "lt{}", target);
+                Ok(OutputConstraint::LessThan(target))
+            };
+        let try_scan_equal =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                text_io::try_scan!(string.bytes() => "eq{}", target);
+                Ok(OutputConstraint::Equal(target))
+            };
+        let try_scan_greater_than_or_equal =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                text_io::try_scan!(string.bytes() => "gte{}", target);
+                Ok(OutputConstraint::GreaterThanOrEqual(target))
+            };
+        let try_scan_greater_than =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                text_io::try_scan!(string.bytes() => "gt{}", target);
+                Ok(OutputConstraint::GreaterThan(target))
+            };
+        let try_scan_plus_minus_ppm =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                let tolerance: f64;
+                text_io::try_scan!(string.bytes() => "{}+-{}ppm", target, tolerance);
+                Ok(OutputConstraint::Range {
+                    min: target * (1_f64 - 1e-6 * tolerance),
+                    max: target * (1_f64 + 1e-6 * tolerance),
+                })
+            };
+        let try_scan_plus_minus_percent =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                let tolerance: f64;
+                text_io::try_scan!(string.bytes() => "{}+-{}pct", target, tolerance);
+                Ok(OutputConstraint::Range {
+                    min: target * (1_f64 - 1e-2 * tolerance),
+                    max: target * (1_f64 + 1e-2 * tolerance),
+                })
+            };
+        let try_scan_plus_minus =
+            |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+                let target: f64;
+                let tolerance: f64;
+                text_io::try_scan!(string.bytes() => "{}+-{}", target, tolerance);
+                Ok(OutputConstraint::Range {
+                    min: target - tolerance,
+                    max: target + tolerance,
+                })
+            };
+        let try_scan_range = |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+            let min: f64;
+            let max: f64;
+            text_io::try_scan!(string.bytes() => "{}-{}", min, max);
+            Ok(OutputConstraint::Range { min, max })
+        };
+        let try_scan_normal = |string: &str| -> Result<OutputConstraint, Box<dyn std::error::Error>> {
+            let target: f64;
+            text_io::try_scan!(string.bytes() => "{}", target);
+            Ok(OutputConstraint::Normal(target))
+        };
+
+        if let Ok(res) = try_scan_less_than_or_equal(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_less_than(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_equal(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_greater_than_or_equal(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_greater_than(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_plus_minus_ppm(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_plus_minus_percent(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_plus_minus(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_range(&the_string) {
+            Ok(res)
+        } else if let Ok(res) = try_scan_normal(&the_string) {
+            Ok(res)
+        } else {
+            Err("invalid output specifier")
+        }
+    }
+}
+
+//----
+// Requirements
+
+#[derive(Debug)]
+#[allow(dead_code)] // Absolute is never constructed
+enum ErrorType {
+    Absolute,
+    Ratiometric,
+}
+impl fmt::Display for ErrorType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorType::Absolute    => write!(f, "Absolute"),
+            ErrorType::Ratiometric => write!(f, "Ratiometric"),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum SortOrder {
+    RootMeanSquareError,
+    RatiometricErrorWorstChannel,
+    RatiometricErrorOnChannel(u8),
+}
+impl fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SortOrder::RootMeanSquareError           => write!(f, "RootMeanSquareError"),
+            SortOrder::RatiometricErrorWorstChannel  => write!(f, "RatiometricErrorWorstChannel"),
+            SortOrder::RatiometricErrorOnChannel(ch) => write!(f, "RatiometricErrorOnChannel({})", ch),
+        }
+    }
+}
 
 struct Requirements {
-    valid: bool,
+    error_type: ErrorType,
+    sort_order: SortOrder,
+
     max_solutions: usize,
 
-    max_outputs: u8,
+    vco_numerator_min: u16,
+    vco_numerator_max: u16,
+    vco_denominator_min: u16,
+    vco_denominator_max: u16,
     vco_megahz_max: f64,
     vco_megahz_min: f64,
 
     inp_megahz: f64,
-    out_megahz: Vec<OutputConstraint>,
+    output_constraints: Vec<OutputConstraint>,
 }
+impl TryFrom<Opt> for Requirements {
+    type Error = &'static str;
 
-impl From<Opt> for Requirements {
-    fn from(opt: Opt) -> Self {
-        let mut reqs = Requirements {
-            valid: false,
-            max_solutions: opt.num_solutions,
+    fn try_from(opt: Opt) -> Result<Self, Self::Error> {
+        let mut error_type = ErrorType::Ratiometric;
+        let mut sort_order = SortOrder::RootMeanSquareError;
 
-            max_outputs: 0,
-            vco_megahz_max: 0_f64,
-            vco_megahz_min: 0_f64,
+        let mut max_outputs = 0_usize;
+        let mut vco_numerator_min = 0_u16;
+        let mut vco_numerator_max = 0_u16;
+        let mut vco_denominator_min = 0_u16;
+        let mut vco_denominator_max = 0_u16;
+        let mut vco_megahz_max = 0_f64;
+        let mut vco_megahz_min = 0_f64;
 
-            inp_megahz: opt.inp_megahz,
-            out_megahz: Vec::<OutputConstraint>::new(),
-        };
+        if opt.sort_by_rmse && opt.sort_by_worst {
+            return Err("Can't specify two different sort orders");
+        } else if opt.sort_by_rmse {
+            sort_order = SortOrder::RootMeanSquareError;
+        } else if opt.sort_by_worst {
+            sort_order = SortOrder::RatiometricErrorWorstChannel;
+        }
+
+        // What hardware are we targetting?  Apply limits associated with that hardware.
         if opt.use_mmcm && opt.use_pll {
-            reqs.valid = false;
-            return reqs;
+            return Err("must specify exactly one target");
         } else if opt.use_mmcm {
-            reqs.valid = true;
-            reqs.max_outputs = 8;
-            reqs.vco_megahz_max = 1200_f64;
-            reqs.vco_megahz_min =  600_f64;
+            max_outputs = 8;
+            vco_numerator_min =  16;
+            vco_numerator_max = 512;
+            vco_denominator_min =   1;
+            vco_denominator_max = 106;
+            vco_megahz_max = 1200_f64;
+            vco_megahz_min =  600_f64;
         } else if opt.use_pll {
-            reqs.valid = true;
-            reqs.max_outputs = 2;
-            reqs.vco_megahz_max = 1200_f64;
-            reqs.vco_megahz_min =  600_f64;
+            max_outputs = 2;
+            vco_numerator_min =  16;
+            vco_numerator_max = 512;
+            vco_denominator_min =   1;
+            vco_denominator_max = 106;
+            vco_megahz_max = 1200_f64;
+            vco_megahz_min =  600_f64;
         } else {
-            reqs.valid = false;
-            return reqs;
+            return Err("must specify exactly one target");
         }
-        if opt.out_megahz.len() > reqs.max_outputs as usize {
-            reqs.valid = false;
-            return reqs;
+
+        // Check limits associated with target.
+        if opt.output_specifiers.len() > max_outputs {
+            return Err("too many outputs requested");
         }
-        for the_string in opt.out_megahz.into_iter() {
-            if the_string.starts_with("lte") {
-                if let Ok(megahz) = the_string[3..].parse::<f64>() {
-                    reqs.out_megahz
-                        .push(OutputConstraint::LessThanOrEqual(megahz));
-                } else {
-                    reqs.valid = false;
-                    return reqs;
-                }
-            } else if the_string.starts_with("lt") {
-                if let Ok(megahz) = the_string[2..].parse::<f64>() {
-                    reqs.out_megahz.push(OutputConstraint::LessThan(megahz));
-                } else {
-                    reqs.valid = false;
-                    return reqs;
-                }
-            } else if the_string.starts_with("eq") {
-                if let Ok(megahz) = the_string[2..].parse::<f64>() {
-                    reqs.out_megahz.push(OutputConstraint::Equal(megahz));
-                } else {
-                    reqs.valid = false;
-                    return reqs;
-                }
-            } else if the_string.starts_with("gte") {
-                if let Ok(megahz) = the_string[3..].parse::<f64>() {
-                    reqs.out_megahz
-                        .push(OutputConstraint::GreaterThanOrEqual(megahz));
-                } else {
-                    reqs.valid = false;
-                    return reqs;
-                }
-            } else if the_string.starts_with("gt") {
-                if let Ok(megahz) = the_string[2..].parse::<f64>() {
-                    reqs.out_megahz.push(OutputConstraint::GreaterThan(megahz));
-                } else {
-                    reqs.valid = false;
-                    return reqs;
-                }
-            } else {
-                let scan_plus_minus_ppm =
-                    |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
-                        let target: f64;
-                        let tolerance: f64;
-                        text_io::try_scan!(string.bytes() => "{}+-{}ppm", target, tolerance);
-                        Ok((target, tolerance))
-                    };
-                let scan_plus_minus_percent =
-                    |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
-                        let target: f64;
-                        let tolerance: f64;
-                        text_io::try_scan!(string.bytes() => "{}+-{}pct", target, tolerance);
-                        Ok((target, tolerance))
-                    };
-                let scan_plus_minus =
-                    |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
-                        let target: f64;
-                        let tolerance: f64;
-                        text_io::try_scan!(string.bytes() => "{}+-{}", target, tolerance);
-                        Ok((target, tolerance))
-                    };
-                let scan_range = |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
-                    let min: f64;
-                    let max: f64;
-                    text_io::try_scan!(string.bytes() => "{}-{}", min, max);
-                    Ok((min, max))
-                };
-                let scan_normal = |string: &str| -> Result<f64, Box<dyn std::error::Error>> {
-                    let target: f64;
-                    text_io::try_scan!(string.bytes() => "{}", target);
-                    Ok(target)
-                };
-                if let Ok((target, tolerance)) = scan_plus_minus_ppm(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range {
-                        min: target * (1_f64 - 1e-6 * tolerance),
-                        max: target * (1_f64 + 1e-6 * tolerance),
-                    });
-                } else if let Ok((target, tolerance)) = scan_plus_minus_percent(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range {
-                        min: target * (1_f64 - 1e-2 * tolerance),
-                        max: target * (1_f64 + 1e-2 * tolerance),
-                    });
-                } else if let Ok((target, tolerance)) = scan_plus_minus(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range {
-                        min: target - tolerance,
-                        max: target + tolerance,
-                    });
-                } else if let Ok((min, max)) = scan_range(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range { min, max });
-                } else if let Ok(target) = scan_normal(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Normal(target));
-                } else {
-                    println!("ERROR: invalid output specifier: {}", the_string);
-                    reqs.valid = false;
-                    return reqs;
-                }
+
+        let mut output_constraints = Vec::<OutputConstraint>::new();
+
+        // Figure out what constraints to apply for each requested output.
+        for (ii, the_string) in opt.output_specifiers.iter().enumerate() {
+            match OutputConstraint::try_parse(&the_string) {
+                Ok(constraint) => {
+                    if let OutputConstraint::Equal(_) = constraint {
+                        if opt.sort_by_rmse || opt.sort_by_worst {
+                            return Err("Can't constrain an output to eq when a sort order is specified");
+                        }
+                        sort_order = SortOrder::RatiometricErrorOnChannel(ii as u8);
+                    }
+                    output_constraints.push(constraint)
+                },
+                Err(err_str) => return Err(&err_str),
             }
         }
-        reqs
+
+        Ok(Requirements {
+            error_type,
+            sort_order,
+            max_solutions: opt.max_solutions,
+
+            vco_numerator_min,
+            vco_numerator_max,
+            vco_denominator_min,
+            vco_denominator_max,
+            vco_megahz_max,
+            vco_megahz_min,
+
+            inp_megahz: opt.inp_megahz,
+            output_constraints,
+        })
     }
 }
-
 impl fmt::Display for Requirements {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "valid         : {}", self.valid)?;
-        writeln!(f, "max_solutions : {}", self.max_solutions)?;
-        writeln!(f, "max_outputs   : {}", self.max_outputs)?;
-        writeln!(f, "vco_megahz_max: {}", self.vco_megahz_max)?;
-        writeln!(f, "vco_megahz_min: {}", self.vco_megahz_min)?;
-        writeln!(f, "inp_megahz    : {}", self.inp_megahz)?;
-        for constraint in &self.out_megahz {
+        writeln!(f, "error_type         : {}", self.error_type)?;
+        writeln!(f, "sort_order         : {}", self.sort_order)?;
+        writeln!(f, "max_solutions      : {}", self.max_solutions)?;
+        writeln!(f, "vco_numerator_min  : {}", self.vco_numerator_min  )?;
+        writeln!(f, "vco_numerator_max  : {}", self.vco_numerator_max  )?;
+        writeln!(f, "vco_denominator_min: {}", self.vco_denominator_min)?;
+        writeln!(f, "vco_denominator_max: {}", self.vco_denominator_max)?;
+        writeln!(f, "vco_megahz_max     : {}", self.vco_megahz_max)?;
+        writeln!(f, "vco_megahz_min     : {}", self.vco_megahz_min)?;
+        writeln!(f, "inp_megahz         : {}", self.inp_megahz)?;
+        for (ii, constraint) in self.output_constraints.iter().enumerate() {
             match constraint {
-                OutputConstraint::Normal(target) => writeln!(f, "out_megahz    :   {}", *target),
-                OutputConstraint::Range {
-                    min: target_min,
-                    max: target_max,
-                } => writeln!(f, "out_megahz    :   {}-{}", *target_min, *target_max),
-                OutputConstraint::LessThan(target) => writeln!(f, "out_megahz    : < {}", *target),
-                OutputConstraint::LessThanOrEqual(target) => {
-                    writeln!(f, "out_megahz    : <={}", *target)
-                }
-                OutputConstraint::Equal(target) => writeln!(f, "out_megahz    :  ={}", *target),
-                OutputConstraint::GreaterThanOrEqual(target) => {
-                    writeln!(f, "out_megahz    : >={}", *target)
-                }
-                OutputConstraint::GreaterThan(target) => {
-                    writeln!(f, "out_megahz    : > {}", *target)
-                }
+                OutputConstraint::Normal(target) =>
+                    writeln!(f, "output{:02}:   {}", ii, *target),
+                OutputConstraint::Range { min, max } =>
+                    writeln!(f, "output{:02}:   {}-{}", ii, *min, *max),
+                OutputConstraint::LessThan(target) =>
+                    writeln!(f, "output{:02}: < {}", ii, *target),
+                OutputConstraint::LessThanOrEqual(target) =>
+                    writeln!(f, "output{:02}: <={}", ii, *target),
+                OutputConstraint::Equal(target) =>
+                    writeln!(f, "output{:02}:  ={}", ii, *target),
+                OutputConstraint::GreaterThanOrEqual(target) =>
+                    writeln!(f, "output{:02}: >={}", ii, *target),
+                OutputConstraint::GreaterThan(target) =>
+                    writeln!(f, "output{:02}: > {}", ii, *target),
             }?;
         }
         Ok(())
     }
 }
 
+//----
+// SolutionSet
+
 #[derive(Debug)]
-#[allow(dead_code)] // Absolute is never constructed
-enum ErrorType {
-    Absolute,
-    Relative,
+struct VcoSolution {
+    input: f64,
+    output: f64,
+    numerator: u16,
+    denominator: u16,
 }
 
 #[derive(Debug)]
-enum SortOrder {
-    IncreasingMaxAbsErr,
-    IncreasingAbsErrOnChannel(u8),
+struct ChannelSolution {
+    input: f64,
+    chan_idx: u8,
+    numerator: u16,
+    denominator: u16,
+    target: f64,
+    actual: f64,
+    absolute_error: f64,
+    ratiometric_error: f64,
 }
 
 #[derive(Debug)]
 struct Solution {
-    clkfbout_mult_f_x8: u16,
-    divclk_divide: u8,
-    clkout_divide: Vec<u16>,
-
-    vco_megahz: f64,
-    out_megahz: Vec<(f64, f64, bool)>, // abs, err, print_red
-    rmse: f64,
-    max_abs_err_megahz: f64,
-    max_abs_err_ppm: f64,
+    vco_solution: VcoSolution,
+    channel_solutions: Vec<ChannelSolution>,
+    root_mean_square_error: f64,
+    worst_error: f64,
+    channel_with_worst_error: u8,
 }
 
 #[derive(Debug)]
@@ -257,52 +364,40 @@ struct SolutionSet {
 fn find_close_vco_freq<'a>(
     vco: f64,
     tolerance: f64,
-    vec: &'a [(f64, u16, u8)],
-) -> Option<&'a (f64, u16, u8)> {
-    vec.iter()
-        .find(|&x| ((x.0 / vco) > (1_f64 - tolerance)) && ((x.0 / vco) < (1_f64 + tolerance)))
+    vco_solutions: &'a [VcoSolution],
+) -> Option<&'a VcoSolution> {
+    let thresh = 1_f64 + tolerance;
+    vco_solutions.iter().find(|&x| ((x.output / vco) < thresh) && ((vco / x.output) < thresh))
 }
 
-impl From<Requirements> for SolutionSet {
-    // TODO: split this up into something more digestable
-    fn from(reqs: Requirements) -> Self {
-        let mut set = SolutionSet {
-            error_type: ErrorType::Relative,
-            sort_order: SortOrder::IncreasingMaxAbsErr,
-            solutions: Vec::<Solution>::new(),
-        };
-
+impl SolutionSet {
+    // TODO: use target hardware parameters to remove magic numbers: 8, 0.125
+    fn get_vco_solutions(reqs: &Requirements) -> Vec<VcoSolution> {
         let in_num_min = cmp::max(
-            16,
-            round::ceil(reqs.vco_megahz_min * 1_f64 * 8_f64 / reqs.inp_megahz, 0) as u16,
+            reqs.vco_numerator_min,
+            round::ceil(reqs.vco_megahz_min * (reqs.vco_denominator_min as f64) * 8_f64 / reqs.inp_megahz, 0) as u16,
         );
         let in_num_max = cmp::min(
-            512,
-            round::floor(reqs.vco_megahz_max * 106_f64 * 8_f64 / reqs.inp_megahz, 0) as u16,
+            reqs.vco_numerator_max,
+            round::floor(reqs.vco_megahz_max * (reqs.vco_denominator_max as f64) * 8_f64 / reqs.inp_megahz, 0) as u16,
         );
         //println!("in_num_min {}, in_num_max {}", in_num_min, in_num_max);
 
-        for (idx, constraint) in reqs.out_megahz.iter().enumerate() {
-            if let OutputConstraint::Equal(_) = constraint {
-                set.sort_order = SortOrder::IncreasingAbsErrOnChannel(idx as u8);
-            }
-        }
-
-        let mut vco_solns = Vec::<(f64, u16, u8)>::new();
+        let mut vco_solns = Vec::<VcoSolution>::new();
         for in_num in in_num_min..=in_num_max {
             let in_den_min = cmp::max(
-                1,
+                reqs.vco_denominator_min,
                 round::ceil(
                     (reqs.inp_megahz * (in_num as f64) / 8_f64) / reqs.vco_megahz_max,
                     0,
-                ) as u8,
+                ) as u16,
             );
             let in_den_max = cmp::min(
-                106,
+                reqs.vco_denominator_max,
                 round::floor(
                     (reqs.inp_megahz * (in_num as f64) / 8_f64) / reqs.vco_megahz_min,
                     0,
-                ) as u8,
+                ) as u16,
             );
             //println!("in_num {}, in_den_min {}, in_den_max {}", in_num, in_den_min, in_den_max);
 
@@ -334,174 +429,201 @@ impl From<Requirements> for SolutionSet {
                 match find_close_vco_freq(vco, 1e-9, &vco_solns) {
                     Some(_) => (),
                     None => {
-                        vco_solns.push((vco, in_num, in_den));
+                        vco_solns.push(VcoSolution{
+                            input: reqs.inp_megahz,
+                            output: vco,
+                            numerator: in_num,
+                            denominator: in_den,
+                        });
                     }
                 }
             }
         }
 
         // sort from high to low vco frequencies to reduce output jitter
-        vco_solns.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        vco_solns.sort_by(|a, b| b.output.partial_cmp(&a.output).unwrap());
 
-        for (vco, in_num, in_den) in &vco_solns {
-            //println!("vco {:4.6}, in_num {}, in_den {}, ", vco, in_num, in_den);
+        vco_solns
+    }
+
+    // TODO: handle target hardware capabilities: remove magic numbers 8 and 1024
+    fn get_channel_solution(vco: f64, chan_idx: u8, constraint: &OutputConstraint) -> Result<ChannelSolution, String> {
+        let target = match constraint {
+            OutputConstraint::Normal(target) => *target,
+            OutputConstraint::Range { min, max } => (*min + *max) / 2_f64,
+            OutputConstraint::LessThan(target) => *target,
+            OutputConstraint::LessThanOrEqual(target) => *target,
+            OutputConstraint::Equal(target) => *target,
+            OutputConstraint::GreaterThanOrEqual(target) => *target,
+            OutputConstraint::GreaterThan(target) => *target,
+        };
+
+        // get closest integer solution
+        let numerator = 8;
+        let den = match chan_idx {
+            0 => (8_f64 * vco / target).round() as u16,
+            _ => 8 * (vco / target).round() as u16,
+        };
+
+        // check den + -1..=+1 solutions
+        let den_candidates = match chan_idx {
+            0 => vec![den-1, den, den+1],
+            _ => vec![den-8, den, den+8],
+        };
+        let mut den_tuples = Vec::<(u16, f64, f64, f64, f64)>::new();
+        for den in den_candidates {
+            if (den < 8) || (den > 1024) {
+                continue;
+            }
+
+            let actual = vco * ((numerator as f64) / (den as f64));
+            let error = actual - target;
+            let absolute_error = error.abs();
+            let ratiometric_error = (error / target).abs();
+
+            // check output range constraints
+            match constraint {
+                OutputConstraint::Range { min, max } => {
+                    if (actual < *min) || (actual > *max) {
+                        continue;
+                    }
+                }
+                OutputConstraint::LessThan(_) => {
+                    if actual >= target {
+                        continue;
+                    }
+                }
+                OutputConstraint::LessThanOrEqual(_) => {
+                    if actual > target {
+                        continue;
+                    }
+                }
+                OutputConstraint::GreaterThanOrEqual(_) => {
+                    if actual < target {
+                        continue;
+                    }
+                }
+                OutputConstraint::GreaterThan(_) => {
+                    if actual <= target {
+                        continue;
+                    }
+                }
+                _ => ()
+            }
+            den_tuples.push((den, actual, error, absolute_error, ratiometric_error));
+        }
+
+        if den_tuples.len() > 0 {
+            den_tuples.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap());
+            let (denominator, actual, error, absolute_error, ratiometric_error) = den_tuples[0];
+
+            Ok(ChannelSolution {
+                input: vco,
+                chan_idx,
+                numerator,
+                denominator,
+                target,
+                actual,
+                absolute_error,
+                ratiometric_error,
+            })
+        } else {
+            Err("No solutions found".to_string())
+        }
+    }
+
+    fn from(reqs: Requirements) -> Self {
+        let vco_solns = SolutionSet::get_vco_solutions(&reqs);
+        let mut solutions = Vec::<Solution>::new();
+         'vco: for VcoSolution {
+            input,
+            output,
+            numerator,
+            denominator,
+         } in &vco_solns {
+            //println!("vco {:4.6}, numerator {}, denominator {}, ", output, numerator, denominator);
 
             // compute nearest output frequencies
-            let mut out_div = vec![0_u16; reqs.out_megahz.len()];
-            let mut out_megahz = vec![0_f64; reqs.out_megahz.len()];
-            let mut out_err = vec![0_f64; reqs.out_megahz.len()];
-            let mut sse = 0_f64;
-
-            let mut max_abs_err_megahz = 0_f64;
-            let mut _max_abs_err_chan = -1_i16;
-            let mut max_err_ppm = 0_f64;
-            let mut max_err_ppm_chan = -1_i16;
-            for (chan, constraint) in reqs.out_megahz.iter().enumerate() {
-                let target_mean = match constraint {
-                    OutputConstraint::Normal(target) => *target,
-                    OutputConstraint::Range {
-                        min: target_min,
-                        max: target_max,
-                    } => (*target_min + *target_max) / 2_f64,
-                    OutputConstraint::LessThan(target) => *target,
-                    OutputConstraint::LessThanOrEqual(target) => *target,
-                    OutputConstraint::Equal(target) => *target,
-                    OutputConstraint::GreaterThanOrEqual(target) => *target,
-                    OutputConstraint::GreaterThan(target) => *target,
-                };
-
-                out_div[chan] = match chan {
-                    0 => (8_f64 * vco / target_mean).round() as u16,
-                    _ => 8 * (vco / target_mean).round() as u16,
-                };
-
-                if out_div[chan] < 7 {                        
-                    println!("ERROR: out_div[{}]: {} - too low continue\n", chan, out_div[chan]);
-                    continue;
-                } else if out_div[chan] < 8 {
-                    out_div[chan] = 8;
-                }
-
-                if out_div[chan] > 1025 {
-                    println!("ERROR: out_div[{}]: {} - too high continue\n", chan, out_div[chan]);
-                    continue;
-                } else if out_div[chan] > 1024 {
-                    out_div[chan] = 1024;
-                }
-
-                out_megahz[chan] = (8_f64 * vco) / (out_div[chan] as f64);
-
-                out_err[chan] = out_megahz[chan] - target_mean;
-                let abs_err_megahz = out_err[chan].abs();
-                let abs_err_ppm = (out_err[chan] / target_mean).abs();
-
-                sse += out_err[chan] * out_err[chan];
-
-                if abs_err_megahz > max_abs_err_megahz {
-                    max_abs_err_megahz = abs_err_megahz;
-                    _max_abs_err_chan = chan as i16;
-                }
-                if abs_err_ppm > max_err_ppm {
-                    max_err_ppm = abs_err_ppm;
-                    max_err_ppm_chan = chan as i16;
-                }
-
-                // check output range constraints
-                match constraint {
-                    OutputConstraint::LessThan(_) => {
-                        if out_err[chan] >= 0_f64 {
-                            continue;
+            let mut channel_solutions = Vec::<ChannelSolution>::new();
+            let mut mse = 0_f64;
+            let mut max_err = -1_f64;
+            let mut max_err_chan = 0; 
+            for (chan, constraint) in reqs.output_constraints.iter().enumerate() {
+                match SolutionSet::get_channel_solution(*output, chan as u8, &constraint) {
+                    Ok(soln) => {
+                        mse += soln.absolute_error * soln.absolute_error;
+                        let err = match reqs.error_type {
+                            ErrorType::Absolute => soln.absolute_error,
+                            ErrorType::Ratiometric => soln.ratiometric_error,
+                        };
+                        if max_err < err {
+                            max_err = err;
+                            max_err_chan = chan;
                         }
-                    }
-                    OutputConstraint::LessThanOrEqual(_) => {
-                        if out_err[chan] > 0_f64 {
-                            continue;
-                        }
-                    }
-                    OutputConstraint::GreaterThanOrEqual(_) => {
-                        if out_err[chan] < 0_f64 {
-                            continue;
-                        }
-                    }
-                    OutputConstraint::GreaterThan(_) => {
-                        if out_err[chan] <= 0_f64 {
-                            continue;
-                        }
-                    }
-                    OutputConstraint::Range {
-                        min: target_min,
-                        max: target_max,
-                    } => {
-                        if (out_megahz[chan] < *target_min) || (*target_max < out_megahz[chan]) {
-                            continue;
-                        }
-                    }
-                    _ => (),
+                        channel_solutions.push(soln);
+                    },
+                    Err(_) => continue 'vco,
                 }
             }
 
             //---- Solution is valid ----
 
-            let mut soln = Solution {
-                clkfbout_mult_f_x8: *in_num,
-                divclk_divide: *in_den,
-                vco_megahz: *vco,
-
-                clkout_divide: out_div,
-                out_megahz: Vec::<(f64, f64, bool)>::new(), // abs, err, print_red
-                rmse: sse.sqrt(),
-                max_abs_err_megahz,
-                max_abs_err_ppm: max_err_ppm,
-            };
-            for chan in 0..reqs.out_megahz.len() {
-                let print_red = chan == (max_err_ppm_chan as usize);
-                soln.out_megahz
-                    .push((out_megahz[chan], out_err[chan], print_red));
-            }
-            set.solutions.push(soln);
+            solutions.push(Solution {
+                vco_solution: VcoSolution {
+                    input: *input,
+                    output: *output,
+                    numerator: *numerator,
+                    denominator: *denominator,
+                },
+                channel_solutions,
+                root_mean_square_error: mse.sqrt(),
+                worst_error: max_err,
+                channel_with_worst_error: max_err_chan as u8,
+            });
         }
 
-        //---- Sort ----
-
-        match set.sort_order {
-            SortOrder::IncreasingMaxAbsErr => {
-                set.solutions
-                    .sort_by(|a, b| a.max_abs_err_ppm.partial_cmp(&b.max_abs_err_ppm).unwrap());
+        //---- Sort and trim ----
+        match reqs.sort_order {
+            SortOrder::RootMeanSquareError => {
+                solutions.sort_by(|a, b| a.root_mean_square_error.partial_cmp(&b.root_mean_square_error).unwrap());
             }
-            SortOrder::IncreasingAbsErrOnChannel(ch) => {
-                set.solutions.sort_by(|a, b| {
-                    a.out_megahz[ch as usize]
-                        .1
-                        .abs()
-                        .partial_cmp(&b.out_megahz[ch as usize].1.abs())
-                        .unwrap()
-                });
+            SortOrder::RatiometricErrorWorstChannel => {
+                solutions.sort_by(|a, b| a.worst_error.partial_cmp(&b.worst_error).unwrap());
+            }
+            SortOrder::RatiometricErrorOnChannel(ch) => {
+                solutions.sort_by(|a, b|
+                    a.channel_solutions[ch as usize].ratiometric_error.partial_cmp(
+                        &b.channel_solutions[ch as usize].ratiometric_error
+                    ).unwrap()
+               );
             }
         };
+        solutions.truncate(reqs.max_solutions);
 
-        //---- Trim to the requested number of solutions ----
-
-        set.solutions.truncate(reqs.max_solutions);
-        set
+        SolutionSet {
+            error_type: reqs.error_type,
+            sort_order: reqs.sort_order,
+            solutions,
+        }
     }
 }
 
 impl fmt::Display for SolutionSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let num_outputs = self.solutions[0].out_megahz.len();
+        let num_outputs = self.solutions[0].channel_solutions.len();
 
         //-- Table Annotation
         match self.sort_order {
-            SortOrder::IncreasingMaxAbsErr => {
-                writeln!(f, "Sorting in order of increasing ppm_err_max")
-            }
-            SortOrder::IncreasingAbsErrOnChannel(ch) => {
-                writeln!(f, "Sorting in order of increasing error on channel {}", ch)
-            }
+            SortOrder::RootMeanSquareError =>
+                writeln!(f, "Sorting in order of increasing root_mean_square_error"),
+            SortOrder::RatiometricErrorWorstChannel =>
+                writeln!(f, "Sorting in order of increasing ppm_err_max"),
+            SortOrder::RatiometricErrorOnChannel(ch) =>
+                writeln!(f, "Sorting in order of increasing error on channel {}", ch),
         }?;
         match self.error_type {
             ErrorType::Absolute => writeln!(f, "Worst absolute output in {}", "red".red()),
-            ErrorType::Relative => writeln!(f, "Worst ratiomnetric output in {}", "red".red()),
+            ErrorType::Ratiometric => writeln!(f, "Worst ratiomnetric output in {}", "red".red()),
         }?;
         writeln!(f)?;
 
@@ -510,7 +632,10 @@ impl fmt::Display for SolutionSet {
         for ii in 0..num_outputs {
             write!(f, " {:>12}{:1}", "MHz", ii)?;
         }
-        write!(f, " {:>13}", "ppm_err_max")?;
+        match self.error_type {
+            ErrorType::Absolute => write!(f, " {:>13}", "MHz_err_max"),
+            ErrorType::Ratiometric => write!(f, " {:>13}", "ppm_err_max"),
+        }?;
         write!(f, " {:>13}", "rms_err(MHz)")?;
         write!(f, " {:>6}", "clkfb")?;
         write!(f, " {:>6}", "divclk")?;
@@ -521,22 +646,22 @@ impl fmt::Display for SolutionSet {
         //-- Solutions
         for (ii, soln) in self.solutions.iter().enumerate() {
             writeln!(f)?;
-            write!(f, "{:>5} {:>12.6}", ii, soln.vco_megahz)?;
-            for (megahz, _, is_red) in &soln.out_megahz {
-                let mut str_megahz: String = format!(" {:>13.6}", megahz);
-                if *is_red {
+            write!(f, "{:>5} {:>12.6}", ii, soln.vco_solution.output)?;
+            for chan_soln in &soln.channel_solutions {
+                let mut str_megahz: String = format!(" {:>13.6}", chan_soln.actual);
+                if ii == (soln.channel_with_worst_error as usize) {
                     str_megahz = str_megahz.red().to_string();
                 }
                 write!(f, "{}", str_megahz)?;
             }
-            write!(f, " {:>13.3}", 1e6 * soln.max_abs_err_ppm)?;
-            write!(f, " {:>13.6}", soln.rmse)?;
-            write!(f, " {:>6.3}", soln.clkfbout_mult_f_x8 as f64 / 8_f64)?;
-            write!(f, " {:>6}", soln.divclk_divide)?;
-            for (ii, val) in soln.clkout_divide.iter().enumerate() {
+            write!(f, " {:>13.3}", 1e6 * soln.worst_error)?;
+            write!(f, " {:>13.6}", soln.root_mean_square_error)?;
+            write!(f, " {:>6.3}", (soln.vco_solution.numerator as f64) / 8_f64)?;
+            write!(f, " {:>6}", soln.vco_solution.denominator as f64)?;
+            for (ii, chan_soln) in soln.channel_solutions.iter().enumerate() {
                 match ii {
-                    0 => write!(f, " {:6.3}", *val as f64 / 8_f64),
-                    _ => write!(f, " {:6}", *val / 8),
+                    0 => write!(f, " {:6.3}", (chan_soln.denominator as f64) / 8_f64),
+                    _ => write!(f, " {:6}", (chan_soln.denominator as f64) / 8_f64),
                 }?;
             }
         }
@@ -546,7 +671,9 @@ impl fmt::Display for SolutionSet {
 }
 
 fn main() {
-    println!("{}", SolutionSet::from(Requirements::from(Opt::from_args())));
+    if let Ok(reqs) = Requirements::try_from(Opt::from_args()) {
+        println!("{}", SolutionSet::from(reqs));
+    }
 }
 
 #[cfg(test)]
@@ -558,9 +685,9 @@ mod tests {
         let opt = Opt {
             use_mmcm: true,
             use_pll: true,
-            num_solutions: 32,
+            max_solutions: 32,
             inp_megahz: 156.25,
-            out_megahz: vec![String::from("166.6"), String::from("gte187.5")],
+            output_constraints: vec![String::from("166.6"), String::from("gte187.5")],
         };
         let reqs = Requirements::from(opt);
         assert_eq!(reqs.valid, false);
@@ -572,23 +699,23 @@ mod tests {
         let opt = Opt {
             use_mmcm: true,
             use_pll: false,
-            num_solutions: 32,
+            max_solutions: 32,
             inp_megahz: 156.25,
-            out_megahz: vec![String::from("166.6"), String::from("gte187.5")],
+            output_constraints: vec![String::from("166.6"), String::from("gte187.5")],
         };
-        let num_solutions = opt.num_solutions;
+        let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.out_megahz.len();
+        let num_outputs = opt.output_constraints.len();
 
         let reqs = Requirements::from(opt);
 
         assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_solutions   , max_solutions);
         assert_eq!(reqs.max_outputs     ,        8);
         assert_eq!(reqs.vco_megahz_max  , 1200_f64);
         assert_eq!(reqs.vco_megahz_min  ,  600_f64);
         assert_eq!(reqs.inp_megahz      , inp_megahz);
-        assert_eq!(reqs.out_megahz.len(), num_outputs);
+        assert_eq!(reqs.output_constraints.len(), num_outputs);
         Ok(())
     }
 
@@ -597,23 +724,23 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
-            num_solutions: 32,
+            max_solutions: 32,
             inp_megahz: 156.25,
-            out_megahz: vec![String::from("166.6"), String::from("gte187.5")],
+            output_constraints: vec![String::from("166.6"), String::from("gte187.5")],
         };
-        let num_solutions = opt.num_solutions;
+        let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.out_megahz.len();
+        let num_outputs = opt.output_constraints.len();
 
         let reqs = Requirements::from(opt);
 
         assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_solutions   , max_solutions);
         assert_eq!(reqs.max_outputs     ,        2);
         assert_eq!(reqs.vco_megahz_max  , 1200_f64);
         assert_eq!(reqs.vco_megahz_min  ,  600_f64);
         assert_eq!(reqs.inp_megahz      , inp_megahz);
-        assert_eq!(reqs.out_megahz.len(), num_outputs);
+        assert_eq!(reqs.output_constraints.len(), num_outputs);
         Ok(())
     }
 
@@ -622,24 +749,24 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
-            num_solutions: 32,
+            max_solutions: 32,
             inp_megahz: 156.25,
-            out_megahz: vec![String::from("166.6"), String::from("181.1-188.8")],
+            output_constraints: vec![String::from("166.6"), String::from("181.1-188.8")],
         };
-        let num_solutions = opt.num_solutions;
+        let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.out_megahz.len();
+        let num_outputs = opt.output_constraints.len();
 
         let reqs = Requirements::from(opt);
 
         assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_solutions   , max_solutions);
         assert_eq!(reqs.max_outputs     ,        2);
         assert_eq!(reqs.vco_megahz_max  , 1200_f64);
         assert_eq!(reqs.vco_megahz_min  ,  600_f64);
         assert_eq!(reqs.inp_megahz      , inp_megahz);
-        assert_eq!(reqs.out_megahz.len(), num_outputs);
-        if let OutputConstraint::Range { min, max, } = reqs.out_megahz[1] {
+        assert_eq!(reqs.output_constraints.len(), num_outputs);
+        if let OutputConstraint::Range { min, max, } = reqs.output_constraints[1] {
             assert!((min - 181.1).abs() < 1e-6);
             assert!((max - 188.8).abs() < 1e-6);
             Ok(())
@@ -653,24 +780,24 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
-            num_solutions: 32,
+            max_solutions: 32,
             inp_megahz: 156.25,
-            out_megahz: vec![String::from("166.6"), String::from("181.1+-0.9pct")],
+            output_constraints: vec![String::from("166.6"), String::from("181.1+-0.9pct")],
         };
-        let num_solutions = opt.num_solutions;
+        let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.out_megahz.len();
+        let num_outputs = opt.output_constraints.len();
 
         let reqs = Requirements::from(opt);
 
         assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_solutions   , max_solutions);
         assert_eq!(reqs.max_outputs     ,        2);
         assert_eq!(reqs.vco_megahz_max  , 1200_f64);
         assert_eq!(reqs.vco_megahz_min  ,  600_f64);
         assert_eq!(reqs.inp_megahz      , inp_megahz);
-        assert_eq!(reqs.out_megahz.len(), num_outputs);
-        if let OutputConstraint::Range { min, max, } = reqs.out_megahz[1] {
+        assert_eq!(reqs.output_constraints.len(), num_outputs);
+        if let OutputConstraint::Range { min, max, } = reqs.output_constraints[1] {
             assert!((min - (181.1 * 0.991)).abs() < 1e-6);
             assert!((max - (181.1 * 1.009)).abs() < 1e-6);
             Ok(())
@@ -684,24 +811,24 @@ mod tests {
         let opt = Opt {
             use_mmcm: false,
             use_pll: true,
-            num_solutions: 32,
+            max_solutions: 32,
             inp_megahz: 156.25,
-            out_megahz: vec![String::from("166.6"), String::from("181.1+-3.5ppm")],
+            output_constraints: vec![String::from("166.6"), String::from("181.1+-3.5ppm")],
         };
-        let num_solutions = opt.num_solutions;
+        let max_solutions = opt.max_solutions;
         let inp_megahz = opt.inp_megahz;
-        let num_outputs = opt.out_megahz.len();
+        let num_outputs = opt.output_constraints.len();
 
         let reqs = Requirements::from(opt);
 
         assert_eq!(reqs.valid           , true);
-        assert_eq!(reqs.max_solutions   , num_solutions);
+        assert_eq!(reqs.max_solutions   , max_solutions);
         assert_eq!(reqs.max_outputs     ,        2);
         assert_eq!(reqs.vco_megahz_max  , 1200_f64);
         assert_eq!(reqs.vco_megahz_min  ,  600_f64);
         assert_eq!(reqs.inp_megahz      , inp_megahz);
-        assert_eq!(reqs.out_megahz.len(), num_outputs);
-        if let OutputConstraint::Range { min, max, } = reqs.out_megahz[1] {
+        assert_eq!(reqs.output_constraints.len(), num_outputs);
+        if let OutputConstraint::Range { min, max, } = reqs.output_constraints[1] {
             assert!((min - (181.1 * (1_f64 - 3.5e-6))).abs() < 1e-6);
             assert!((max - (181.1 * (1_f64 + 3.5e-6))).abs() < 1e-6);
             Ok(())
