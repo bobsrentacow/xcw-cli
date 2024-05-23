@@ -360,19 +360,10 @@ struct SolutionSet {
     solutions: Vec<Solution>,
 }
 
-// TODO: Understand lifetimes enough to know how to clean this up.
-fn find_close_vco_freq<'a>(
-    vco: f64,
-    tolerance: f64,
-    vco_solutions: &'a [VcoSolution],
-) -> Option<&'a VcoSolution> {
-    let thresh = 1_f64 + tolerance;
-    vco_solutions.iter().find(|&x| ((x.output / vco) < thresh) && ((vco / x.output) < thresh))
-}
-
 impl SolutionSet {
     // TODO: use target hardware parameters to remove magic numbers: 8, 0.125
     fn get_vco_solutions(reqs: &Requirements) -> Vec<VcoSolution> {
+
         let in_num_min = cmp::max(
             reqs.vco_numerator_min,
             round::ceil(reqs.vco_megahz_min * (reqs.vco_denominator_min as f64) * 8_f64 / reqs.inp_megahz, 0) as u16,
@@ -426,7 +417,9 @@ impl SolutionSet {
                     continue;
                 }
 
-                match find_close_vco_freq(vco, 1e-9, &vco_solns) {
+                let thresh = 1_f64 + 1e-9;
+                let found = vco_solns.iter().find(|&x| ((x.output / vco) < thresh) && ((vco / x.output) < thresh));
+                match found {
                     Some(_) => (),
                     None => {
                         vco_solns.push(VcoSolution{
@@ -513,7 +506,7 @@ impl SolutionSet {
             den_tuples.push((den, actual, error, absolute_error, ratiometric_error));
         }
 
-        if den_tuples.len() > 0 {
+        if !den_tuples.is_empty() {
             den_tuples.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap());
             let (denominator, actual, error, absolute_error, ratiometric_error) = den_tuples[0];
 
