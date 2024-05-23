@@ -129,9 +129,6 @@ impl OutputConstraint {
 // Requirements
 //   This should fully specify the problem we are trying to solve.
 
-// TODO: Couldn't figure out how to get Into<f64> working.
-// Yeah it's a little tricky because you can't call `into()` in the print! macro as it takes in
-// lots of types. So you have to explicitly call it with Into::<T>::into(...)
 #[derive(Debug, Copy, Clone)]
 pub struct Fraction {
     pub num: u16,
@@ -199,32 +196,18 @@ pub struct Requirements {
 impl TryFrom<Opt> for Requirements {
     type Error = &'static str;
 
-    // Try to refactor this to use no `mut` variables, or at most a few.
     fn try_from(opt: Opt) -> Result<Self, Self::Error> {
-        // This isn't C. Also mutable variables are almost always a mistake, they should be needed
-        // very, very rarely (see sort_order example below).
-        let mut error_type = ErrorType::Ratiometric;
-        let mut sort_order = SortOrder::RootMeanSquareError;
-
-        let mut max_outputs = 0_usize;
-        let mut vco_divider_num_min = Fraction { num: 0, den: 0 };
-        let mut vco_divider_num_max = Fraction { num: 0, den: 0 };
-        let mut vco_divider_den_min = 0_u16;
-        let mut vco_divider_den_max = 0_u16;
-        let mut vco_megahz_max = 0_f64;
-        let mut vco_megahz_min = 0_f64;
-        let mut chan_divider_min = Vec::<Fraction>::new();
-        let mut chan_divider_max = Vec::<Fraction>::new();
-
         if opt.sort_by_rmse && opt.sort_by_worst {
             return Err("Can't specify two different sort orders");
-        } else if opt.sort_by_rmse {
-            sort_order = SortOrder::RootMeanSquareError;
-        } else if opt.sort_by_worst {
-            sort_order = SortOrder::RatiometricErrorWorstChannel;
+        }
+        if !opt.sort_by_rmse && !opt.sort_by_worst {
+            return Err("must specify exactly one target");
+        }
+        if opt.use_mmcm && opt.use_pll {
+            return Err("must specify exactly one target");
         }
 
-        // Don't forget that Rust is expression oriented, so you can do cool stuff like this.
+        let error_type = ErrorType::Ratiometric;
         let mut sort_order = {
             if opt.sort_by_rmse {
                 SortOrder::RootMeanSquareError
@@ -235,13 +218,17 @@ impl TryFrom<Opt> for Requirements {
             }
         };
 
-        // What hardware are we targetting?  Apply associated limits.
-        if opt.use_mmcm && opt.use_pll {
-            return Err("must specify exactly one target");
-        }
+        let max_outputs;
+        let vco_divider_num_min;
+        let vco_divider_num_max;
+        let vco_divider_den_min;
+        let vco_divider_den_max;
+        let vco_megahz_max = 0_f64;
+        let vco_megahz_min = 0_f64;
+        let mut chan_divider_min = Vec::<Fraction>::new();
+        let mut chan_divider_max = Vec::<Fraction>::new();
 
-        // You can use the same trick to turn this entire block into an expression that creates the
-        // correct Requirements instance.
+        // What hardware are we targetting?  Apply associated limits.
         if opt.use_mmcm {
             max_outputs = 8;
             vco_divider_num_min = Fraction { num: 2 * 8, den: 8 };
@@ -277,8 +264,6 @@ impl TryFrom<Opt> for Requirements {
                 chan_divider_min.push(Fraction { num: 128, den: 1 });
                 chan_divider_max.push(Fraction { num: 128, den: 1 });
             }
-        } else {
-            return Err("must specify exactly one target");
         }
 
         // Check limits associated with target.
@@ -286,10 +271,8 @@ impl TryFrom<Opt> for Requirements {
             return Err("too many outputs requested");
         }
 
-        let mut output_constraints = Vec::<OutputConstraint>::new();
-
-        // TODO: reduce number of indentations
         // Figure out what constraints to apply for each requested output.
+        let mut output_constraints = Vec::<OutputConstraint>::new();
         for (ii, the_string) in opt.output_specifiers.iter().enumerate() {
             match OutputConstraint::try_parse(&the_string) {
                 Ok(constraint) => {
