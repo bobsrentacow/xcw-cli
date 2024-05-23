@@ -1,8 +1,8 @@
-use structopt::StructOpt;
+use colored::Colorize;
+use math::round;
 use std::cmp;
 use std::fmt;
-use math::round;
-use colored::Colorize;
+use structopt::StructOpt;
 
 // TODO: Learn how to use the doc tool and add special comments
 
@@ -33,12 +33,12 @@ struct Opt {
 
 enum OutputConstraint {
     Normal(f64),
-    Range {min: f64, max:f64},
+    Range { min: f64, max: f64 },
     LessThan(f64),
     LessThanOrEqual(f64),
     Equal(f64),
     GreaterThanOrEqual(f64),
-    GreaterThan(f64)
+    GreaterThan(f64),
 }
 
 struct Requirements {
@@ -58,11 +58,10 @@ impl From<Opt> for Requirements {
         let mut reqs = Requirements {
             valid: false,
             max_solutions: opt.num_solutions,
-            
+
             max_outputs: 0,
             vco_megahz_max: 0_f64,
             vco_megahz_min: 0_f64,
-            
 
             inp_megahz: opt.inp_megahz,
             out_megahz: Vec::<OutputConstraint>::new(),
@@ -86,9 +85,10 @@ impl From<Opt> for Requirements {
             return reqs;
         }
         for the_string in opt.out_megahz.into_iter() {
-            if the_string.starts_with("lte") {              
+            if the_string.starts_with("lte") {
                 if let Ok(megahz) = the_string[3..].parse::<f64>() {
-                    reqs.out_megahz.push(OutputConstraint::LessThanOrEqual(megahz));
+                    reqs.out_megahz
+                        .push(OutputConstraint::LessThanOrEqual(megahz));
                 } else {
                     reqs.valid = false;
                     return reqs;
@@ -100,21 +100,22 @@ impl From<Opt> for Requirements {
                     reqs.valid = false;
                     return reqs;
                 }
-            } else if the_string.starts_with("eq") {              
+            } else if the_string.starts_with("eq") {
                 if let Ok(megahz) = the_string[2..].parse::<f64>() {
                     reqs.out_megahz.push(OutputConstraint::Equal(megahz));
                 } else {
                     reqs.valid = false;
                     return reqs;
                 }
-            } else if the_string.starts_with("gte") {             
+            } else if the_string.starts_with("gte") {
                 if let Ok(megahz) = the_string[3..].parse::<f64>() {
-                    reqs.out_megahz.push(OutputConstraint::GreaterThanOrEqual(megahz));
+                    reqs.out_megahz
+                        .push(OutputConstraint::GreaterThanOrEqual(megahz));
                 } else {
                     reqs.valid = false;
                     return reqs;
                 }
-            } else if the_string.starts_with("gt") {              
+            } else if the_string.starts_with("gt") {
                 if let Ok(megahz) = the_string[2..].parse::<f64>() {
                     reqs.out_megahz.push(OutputConstraint::GreaterThan(megahz));
                 } else {
@@ -122,24 +123,27 @@ impl From<Opt> for Requirements {
                     return reqs;
                 }
             } else {
-                let scan_plus_minus_ppm = |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
-                    let target: f64;
-                    let tolerance: f64;
-                    text_io::try_scan!(string.bytes() => "{}+-{}ppm", target, tolerance);
-                    Ok((target, tolerance))
-                };
-                let scan_plus_minus_percent = |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
-                    let target: f64;
-                    let tolerance: f64;
-                    text_io::try_scan!(string.bytes() => "{}+-{}pct", target, tolerance);
-                    Ok((target, tolerance))
-                };
-                let scan_plus_minus = |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
-                    let target: f64;
-                    let tolerance: f64;
-                    text_io::try_scan!(string.bytes() => "{}+-{}", target, tolerance);
-                    Ok((target, tolerance))
-                };
+                let scan_plus_minus_ppm =
+                    |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
+                        let target: f64;
+                        let tolerance: f64;
+                        text_io::try_scan!(string.bytes() => "{}+-{}ppm", target, tolerance);
+                        Ok((target, tolerance))
+                    };
+                let scan_plus_minus_percent =
+                    |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
+                        let target: f64;
+                        let tolerance: f64;
+                        text_io::try_scan!(string.bytes() => "{}+-{}pct", target, tolerance);
+                        Ok((target, tolerance))
+                    };
+                let scan_plus_minus =
+                    |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
+                        let target: f64;
+                        let tolerance: f64;
+                        text_io::try_scan!(string.bytes() => "{}+-{}", target, tolerance);
+                        Ok((target, tolerance))
+                    };
                 let scan_range = |string: &str| -> Result<(f64, f64), Box<dyn std::error::Error>> {
                     let min: f64;
                     let max: f64;
@@ -152,13 +156,22 @@ impl From<Opt> for Requirements {
                     Ok(target)
                 };
                 if let Ok((target, tolerance)) = scan_plus_minus_ppm(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range{min: target * (1_f64 - 1e-6 * tolerance), max: target * (1_f64 + 1e-6 * tolerance)});
+                    reqs.out_megahz.push(OutputConstraint::Range {
+                        min: target * (1_f64 - 1e-6 * tolerance),
+                        max: target * (1_f64 + 1e-6 * tolerance),
+                    });
                 } else if let Ok((target, tolerance)) = scan_plus_minus_percent(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range{min: target * (1_f64 - 1e-2 * tolerance), max: target * (1_f64 + 1e-2 * tolerance)});
+                    reqs.out_megahz.push(OutputConstraint::Range {
+                        min: target * (1_f64 - 1e-2 * tolerance),
+                        max: target * (1_f64 + 1e-2 * tolerance),
+                    });
                 } else if let Ok((target, tolerance)) = scan_plus_minus(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range{min: target - tolerance, max: target + tolerance});
+                    reqs.out_megahz.push(OutputConstraint::Range {
+                        min: target - tolerance,
+                        max: target + tolerance,
+                    });
                 } else if let Ok((min, max)) = scan_range(&the_string) {
-                    reqs.out_megahz.push(OutputConstraint::Range{min, max});
+                    reqs.out_megahz.push(OutputConstraint::Range { min, max });
                 } else if let Ok(target) = scan_normal(&the_string) {
                     reqs.out_megahz.push(OutputConstraint::Normal(target));
                 } else {
@@ -182,15 +195,24 @@ impl fmt::Display for Requirements {
         writeln!(f, "inp_megahz    : {}", self.inp_megahz)?;
         for constraint in &self.out_megahz {
             match constraint {
-                OutputConstraint::Normal(target)                         => writeln!(f, "out_megahz    :   {}"   , *target),
-                OutputConstraint::Range{min: target_min, max:target_max} => writeln!(f, "out_megahz    :   {}-{}", *target_min, *target_max),
-                OutputConstraint::LessThan(target)                       => writeln!(f, "out_megahz    : < {}"   , *target),
-                OutputConstraint::LessThanOrEqual(target)                => writeln!(f, "out_megahz    : <={}"   , *target),
-                OutputConstraint::Equal(target)                          => writeln!(f, "out_megahz    :  ={}"   , *target),
-                OutputConstraint::GreaterThanOrEqual(target)             => writeln!(f, "out_megahz    : >={}"   , *target),
-                OutputConstraint::GreaterThan(target)                    => writeln!(f, "out_megahz    : > {}"   , *target),
+                OutputConstraint::Normal(target) => writeln!(f, "out_megahz    :   {}", *target),
+                OutputConstraint::Range {
+                    min: target_min,
+                    max: target_max,
+                } => writeln!(f, "out_megahz    :   {}-{}", *target_min, *target_max),
+                OutputConstraint::LessThan(target) => writeln!(f, "out_megahz    : < {}", *target),
+                OutputConstraint::LessThanOrEqual(target) => {
+                    writeln!(f, "out_megahz    : <={}", *target)
+                }
+                OutputConstraint::Equal(target) => writeln!(f, "out_megahz    :  ={}", *target),
+                OutputConstraint::GreaterThanOrEqual(target) => {
+                    writeln!(f, "out_megahz    : >={}", *target)
+                }
+                OutputConstraint::GreaterThan(target) => {
+                    writeln!(f, "out_megahz    : > {}", *target)
+                }
             }?;
-        };
+        }
         Ok(())
     }
 }
@@ -203,7 +225,7 @@ enum ErrorType {
 }
 
 #[derive(Debug)]
-enum SortOrder{
+enum SortOrder {
     IncreasingMaxAbsErr,
     IncreasingAbsErrOnChannel(u8),
 }
@@ -225,12 +247,17 @@ struct Solution {
 struct SolutionSet {
     error_type: ErrorType,
     sort_order: SortOrder,
-    solutions: Vec<Solution>
+    solutions: Vec<Solution>,
 }
 
-// TODO: Understand lifetimes enough to know how to clean this up.  
-fn find_close_vco_freq<'a>(vco: f64, tolerance: f64, vec: &'a[(f64, u16, u8)]) -> Option<&'a(f64, u16, u8)> {
-    vec.iter().find(|&x| ((x.0 / vco) > (1_f64 - tolerance)) && ((x.0 / vco) < (1_f64 + tolerance)))
+// TODO: Understand lifetimes enough to know how to clean this up.
+fn find_close_vco_freq<'a>(
+    vco: f64,
+    tolerance: f64,
+    vec: &'a [(f64, u16, u8)],
+) -> Option<&'a (f64, u16, u8)> {
+    vec.iter()
+        .find(|&x| ((x.0 / vco) > (1_f64 - tolerance)) && ((x.0 / vco) < (1_f64 + tolerance)))
 }
 
 impl From<Requirements> for SolutionSet {
@@ -242,20 +269,38 @@ impl From<Requirements> for SolutionSet {
             solutions: Vec::<Solution>::new(),
         };
 
-        let in_num_min = cmp::max( 16, round::ceil(reqs.vco_megahz_min * 1_f64 * 8_f64 / reqs.inp_megahz, 0) as u16);
-        let in_num_max = cmp::min(512, round::floor(reqs.vco_megahz_max * 106_f64 * 8_f64 / reqs.inp_megahz, 0) as u16);
+        let in_num_min = cmp::max(
+            16,
+            round::ceil(reqs.vco_megahz_min * 1_f64 * 8_f64 / reqs.inp_megahz, 0) as u16,
+        );
+        let in_num_max = cmp::min(
+            512,
+            round::floor(reqs.vco_megahz_max * 106_f64 * 8_f64 / reqs.inp_megahz, 0) as u16,
+        );
         //println!("in_num_min {}, in_num_max {}", in_num_min, in_num_max);
 
         for (idx, constraint) in reqs.out_megahz.iter().enumerate() {
             if let OutputConstraint::Equal(_) = constraint {
                 set.sort_order = SortOrder::IncreasingAbsErrOnChannel(idx as u8);
             }
-        };
+        }
 
         let mut vco_solns = Vec::<(f64, u16, u8)>::new();
         for in_num in in_num_min..=in_num_max {
-            let in_den_min = cmp::max(  1, round::ceil((reqs.inp_megahz * (in_num as f64) / 8_f64) / reqs.vco_megahz_max, 0) as u8);
-            let in_den_max = cmp::min(106, round::floor((reqs.inp_megahz * (in_num as f64) / 8_f64) / reqs.vco_megahz_min, 0) as u8);
+            let in_den_min = cmp::max(
+                1,
+                round::ceil(
+                    (reqs.inp_megahz * (in_num as f64) / 8_f64) / reqs.vco_megahz_max,
+                    0,
+                ) as u8,
+            );
+            let in_den_max = cmp::min(
+                106,
+                round::floor(
+                    (reqs.inp_megahz * (in_num as f64) / 8_f64) / reqs.vco_megahz_min,
+                    0,
+                ) as u8,
+            );
             //println!("in_num {}, in_den_min {}, in_den_max {}", in_num, in_den_min, in_den_max);
 
             for in_den in in_den_min..=in_den_max {
@@ -263,25 +308,37 @@ impl From<Requirements> for SolutionSet {
 
                 // check for out of bounds vco freq
                 if vco < reqs.vco_megahz_min {
-                  println!("ERROR: {:11.6} * {:5.3}/{} = {:11.6} - vco lo break\n", reqs.inp_megahz, 0.125 * (in_num as f64), in_den, vco);
-                  break;
+                    println!(
+                        "ERROR: {:11.6} * {:5.3}/{} = {:11.6} - vco lo break\n",
+                        reqs.inp_megahz,
+                        0.125 * (in_num as f64),
+                        in_den,
+                        vco
+                    );
+                    break;
                 }
                 if vco > reqs.vco_megahz_max {
-                  println!("ERROR: {:11.6} * {:5.3}/{} = {:11.6} - vco hi continue\n", reqs.inp_megahz, 0.125 * (in_num as f64), in_den, vco);
-                  continue;
+                    println!(
+                        "ERROR: {:11.6} * {:5.3}/{} = {:11.6} - vco hi continue\n",
+                        reqs.inp_megahz,
+                        0.125 * (in_num as f64),
+                        in_den,
+                        vco
+                    );
+                    continue;
                 }
 
                 match find_close_vco_freq(vco, 1e-9, &vco_solns) {
                     Some(_) => (),
                     None => {
                         vco_solns.push((vco, in_num, in_den));
-                    },
+                    }
                 }
             }
         }
 
         // sort from high to low vco frequencies to reduce output jitter
-        vco_solns.sort_by(|a,b| b.0.partial_cmp(&a.0).unwrap());
+        vco_solns.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
 
         for (vco, in_num, in_den) in &vco_solns {
             //println!("vco {:4.6}, in_num {}, in_den {}, ", vco, in_num, in_den);
@@ -293,18 +350,21 @@ impl From<Requirements> for SolutionSet {
             let mut sse = 0_f64;
 
             let mut max_abs_err_megahz = 0_f64;
-            let mut _max_abs_err_chan  = -1_i16;
-            let mut max_err_ppm        = 0_f64;
-            let mut max_err_ppm_chan   = -1_i16;
+            let mut _max_abs_err_chan = -1_i16;
+            let mut max_err_ppm = 0_f64;
+            let mut max_err_ppm_chan = -1_i16;
             for (chan, constraint) in reqs.out_megahz.iter().enumerate() {
                 let target_mean = match constraint {
-                    OutputConstraint::Normal(target)                          => *target,
-                    OutputConstraint::Range{min: target_min, max: target_max} => (*target_min + *target_max) / 2_f64,
-                    OutputConstraint::LessThan(target)                        => *target,
-                    OutputConstraint::LessThanOrEqual(target)                 => *target,
-                    OutputConstraint::Equal(target)                           => *target,
-                    OutputConstraint::GreaterThanOrEqual(target)              => *target,
-                    OutputConstraint::GreaterThan(target)                     => *target,
+                    OutputConstraint::Normal(target) => *target,
+                    OutputConstraint::Range {
+                        min: target_min,
+                        max: target_max,
+                    } => (*target_min + *target_max) / 2_f64,
+                    OutputConstraint::LessThan(target) => *target,
+                    OutputConstraint::LessThanOrEqual(target) => *target,
+                    OutputConstraint::Equal(target) => *target,
+                    OutputConstraint::GreaterThanOrEqual(target) => *target,
+                    OutputConstraint::GreaterThan(target) => *target,
                 };
 
                 out_div[chan] = match chan {
@@ -325,7 +385,7 @@ impl From<Requirements> for SolutionSet {
                 } else if out_div[chan] > 1024 {
                     out_div[chan] = 1024;
                 }
-                
+
                 out_megahz[chan] = (8_f64 * vco) / (out_div[chan] as f64);
 
                 out_err[chan] = out_megahz[chan] - target_mean;
@@ -333,7 +393,7 @@ impl From<Requirements> for SolutionSet {
                 let abs_err_ppm = (out_err[chan] / target_mean).abs();
 
                 sse += out_err[chan] * out_err[chan];
-                
+
                 if abs_err_megahz > max_abs_err_megahz {
                     max_abs_err_megahz = abs_err_megahz;
                     _max_abs_err_chan = chan as i16;
@@ -345,26 +405,34 @@ impl From<Requirements> for SolutionSet {
 
                 // check output range constraints
                 match constraint {
-                    OutputConstraint::LessThan(_) =>
+                    OutputConstraint::LessThan(_) => {
                         if out_err[chan] >= 0_f64 {
                             continue;
-                        },
-                    OutputConstraint::LessThanOrEqual(_) =>
+                        }
+                    }
+                    OutputConstraint::LessThanOrEqual(_) => {
                         if out_err[chan] > 0_f64 {
                             continue;
-                        },
-                    OutputConstraint::GreaterThanOrEqual(_) =>
+                        }
+                    }
+                    OutputConstraint::GreaterThanOrEqual(_) => {
                         if out_err[chan] < 0_f64 {
                             continue;
-                        },
-                    OutputConstraint::GreaterThan(_) =>
+                        }
+                    }
+                    OutputConstraint::GreaterThan(_) => {
                         if out_err[chan] <= 0_f64 {
                             continue;
-                        },
-                    OutputConstraint::Range{min:target_min, max:target_max} =>
-                        if (out_megahz[chan] < *target_min) || (*target_max < out_megahz[chan]){
+                        }
+                    }
+                    OutputConstraint::Range {
+                        min: target_min,
+                        max: target_max,
+                    } => {
+                        if (out_megahz[chan] < *target_min) || (*target_max < out_megahz[chan]) {
                             continue;
-                        },
+                        }
+                    }
                     _ => (),
                 }
             }
@@ -384,7 +452,8 @@ impl From<Requirements> for SolutionSet {
             };
             for chan in 0..reqs.out_megahz.len() {
                 let print_red = chan == (max_err_ppm_chan as usize);
-                soln.out_megahz.push((out_megahz[chan], out_err[chan], print_red));
+                soln.out_megahz
+                    .push((out_megahz[chan], out_err[chan], print_red));
             }
             set.solutions.push(soln);
         }
@@ -393,11 +462,18 @@ impl From<Requirements> for SolutionSet {
 
         match set.sort_order {
             SortOrder::IncreasingMaxAbsErr => {
-                set.solutions.sort_by(|a, b| a.max_abs_err_ppm.partial_cmp(&b.max_abs_err_ppm).unwrap());
-            },
+                set.solutions
+                    .sort_by(|a, b| a.max_abs_err_ppm.partial_cmp(&b.max_abs_err_ppm).unwrap());
+            }
             SortOrder::IncreasingAbsErrOnChannel(ch) => {
-                set.solutions.sort_by(|a, b| a.out_megahz[ch as usize].1.abs().partial_cmp(&b.out_megahz[ch as usize].1.abs()).unwrap());
-            },
+                set.solutions.sort_by(|a, b| {
+                    a.out_megahz[ch as usize]
+                        .1
+                        .abs()
+                        .partial_cmp(&b.out_megahz[ch as usize].1.abs())
+                        .unwrap()
+                });
+            }
         };
 
         //---- Trim to the requested number of solutions ----
@@ -413,8 +489,12 @@ impl fmt::Display for SolutionSet {
 
         //-- Table Annotation
         match self.sort_order {
-            SortOrder::IncreasingMaxAbsErr => writeln!(f, "Sorting in order of increasing ppm_err_max"),
-            SortOrder::IncreasingAbsErrOnChannel(ch) => writeln!(f, "Sorting in order of increasing error on channel {}", ch),
+            SortOrder::IncreasingMaxAbsErr => {
+                writeln!(f, "Sorting in order of increasing ppm_err_max")
+            }
+            SortOrder::IncreasingAbsErrOnChannel(ch) => {
+                writeln!(f, "Sorting in order of increasing error on channel {}", ch)
+            }
         }?;
         match self.error_type {
             ErrorType::Absolute => writeln!(f, "Worst absolute output in {}", "red".red()),
