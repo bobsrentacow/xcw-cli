@@ -330,38 +330,9 @@ struct VcoSolution {
     numerator: u16,
     denominator: u16,
 }
-
-#[derive(Debug)]
-struct ChannelSolution {
-    input: f64,
-    chan_idx: u8,
-    numerator: u16,
-    denominator: u16,
-    target: f64,
-    actual: f64,
-    absolute_error: f64,
-    ratiometric_error: f64,
-}
-
-#[derive(Debug)]
-struct Solution {
-    vco_solution: VcoSolution,
-    channel_solutions: Vec<ChannelSolution>,
-    root_mean_square_error: f64,
-    worst_error: f64,
-    channel_with_worst_error: u8,
-}
-
-#[derive(Debug)]
-struct SolutionSet {
-    error_type: ErrorType,
-    sort_order: SortOrder,
-    solutions: Vec<Solution>,
-}
-
-impl SolutionSet {
+impl VcoSolution {
     // TODO: use target hardware parameters to remove magic numbers: 8, 0.125
-    fn get_vco_solutions(reqs: &Requirements) -> Vec<VcoSolution> {
+    fn get_solutions(reqs: &Requirements) -> Vec<VcoSolution> {
 
         let in_num_min = cmp::max(
             reqs.vco_numerator_min,
@@ -437,9 +408,22 @@ impl SolutionSet {
 
         vco_solns
     }
+}
 
+#[derive(Debug)]
+struct ChannelSolution {
+    input: f64,
+    chan_idx: u8,
+    numerator: u16,
+    denominator: u16,
+    target: f64,
+    actual: f64,
+    absolute_error: f64,
+    ratiometric_error: f64,
+}
+impl ChannelSolution {
     // TODO: handle target hardware capabilities: remove magic numbers 8 and 1024
-    fn get_channel_solution(vco: f64, chan_idx: u8, constraint: &OutputConstraint) -> Result<ChannelSolution, String> {
+    fn try_solve(vco: f64, chan_idx: u8, constraint: &OutputConstraint) -> Result<ChannelSolution, String> {
         let target = match constraint {
             OutputConstraint::Normal(target) => *target,
             OutputConstraint::Range { min, max } => (*min + *max) / 2_f64,
@@ -523,9 +507,27 @@ impl SolutionSet {
             Err("No solutions found".to_string())
         }
     }
+}
 
+#[derive(Debug)]
+struct Solution {
+    vco_solution: VcoSolution,
+    channel_solutions: Vec<ChannelSolution>,
+    root_mean_square_error: f64,
+    worst_error: f64,
+    channel_with_worst_error: u8,
+}
+
+#[derive(Debug)]
+struct SolutionSet {
+    error_type: ErrorType,
+    sort_order: SortOrder,
+    solutions: Vec<Solution>,
+}
+
+impl SolutionSet {
     fn from(reqs: Requirements) -> Self {
-        let vco_solns = SolutionSet::get_vco_solutions(&reqs);
+        let vco_solns = VcoSolution::get_solutions(&reqs);
         let mut solutions = Vec::<Solution>::new();
          'vco: for VcoSolution {
             input,
@@ -541,7 +543,7 @@ impl SolutionSet {
             let mut max_err = -1_f64;
             let mut max_err_chan = 0; 
             for (chan, constraint) in reqs.output_constraints.iter().enumerate() {
-                match SolutionSet::get_channel_solution(*output, chan as u8, &constraint) {
+                match ChannelSolution::try_solve(*output, chan as u8, &constraint) {
                     Ok(soln) => {
                         mse += soln.absolute_error * soln.absolute_error;
                         let err = match reqs.error_type {
