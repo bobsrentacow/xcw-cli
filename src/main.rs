@@ -9,12 +9,12 @@ use structopt::StructOpt;
 
 // TODO: make the --help option useful
 #[derive(Debug, StructOpt)]
-#[structopt(name = "cli options", about = "How to calulate and display results")]
+#[structopt(name = "xilinx clock wizard", about = "How to calulate and display results")]
 struct Opt {
-    /// Select MMCM mode
+    /// Select UltraScale MMCM mode
     #[structopt(short = "m", long = "mmcm")]
     use_mmcm: bool,
-    /// Select PLL mode
+    /// Select UltraScale PLL mode
     #[structopt(short = "p", long = "pll")]
     use_pll: bool,
 
